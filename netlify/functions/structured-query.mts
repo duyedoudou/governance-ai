@@ -22,7 +22,7 @@ type QuerySpec = {
 };
 
 type FieldDef = { type: FieldType; label: string; expr: string; enumValues?: string[] };
-type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef> };
+type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef>; distinctRows?: boolean };
 
 function env(name: string) { try { return Netlify.env.get(name); } catch { return undefined; } }
 function cleanText(value: unknown) { return String(value ?? "").trim(); }
@@ -51,6 +51,51 @@ const DATASETS: Record<string, DatasetDef> = {
       age: { type: "number", label: "年龄", expr: `EXTRACT(YEAR FROM age('${AS_OF}'::date,p.birth_date))::int` }, village_group: { type: "string", label: "村组", expr: "h.village_group" },
       household_id: { type: "string", label: "家庭ID", expr: "h.household_id" }, address: { type: "string", label: "家庭地址", expr: "h.address" },
       special_tags: { type: "tags", label: "特殊标签", expr: "p.special_tags" }, risk_tags: { type: "tags", label: "风险标签", expr: "p.risk_tags" },
+    },
+  },
+  people_governance: {
+    id: "people_governance", title: "人员综合治理视图", source: "multi-person-governance",
+    from: `people p
+      LEFT JOIN households h ON h.household_id=p.household_id
+      LEFT JOIN pension_accounts pa ON pa.person_id=p.person_id
+      LEFT JOIN pension_payments pp ON pp.person_id=p.person_id
+      LEFT JOIN welfare_records w ON w.person_id=p.person_id
+      LEFT JOIN evacuations e ON e.person_id=p.person_id
+      LEFT JOIN events ev ON ev.event_id=e.event_id`,
+    defaultSelect: ["person_id","name","gender","age","village_group","address","special_tags","risk_tags"],
+    distinctRows: true,
+    fields: {
+      person_id: { type: "string", label: "人员ID", expr: "p.person_id" },
+      name: { type: "string", label: "姓名", expr: "p.name" },
+      gender: { type: "enum", label: "性别", expr: "p.gender", enumValues: ["男","女"] },
+      birth_date: { type: "date", label: "出生日期", expr: "p.birth_date" },
+      age: { type: "number", label: "年龄", expr: `EXTRACT(YEAR FROM age('${AS_OF}'::date,p.birth_date))::int` },
+      village_group: { type: "string", label: "村组", expr: "h.village_group" },
+      household_id: { type: "string", label: "家庭ID", expr: "h.household_id" },
+      address: { type: "string", label: "家庭地址", expr: "h.address" },
+      special_tags: { type: "tags", label: "特殊标签", expr: "p.special_tags" },
+      risk_tags: { type: "tags", label: "风险标签", expr: "p.risk_tags" },
+      insurance_type: { type: "string", label: "参保类型", expr: "pa.insurance_type" },
+      enrollment_status: { type: "string", label: "参保状态", expr: "pa.enrollment_status" },
+      enrollment_date: { type: "date", label: "参保日期", expr: "pa.enrollment_date" },
+      benefit_status: { type: "string", label: "待遇状态", expr: "pa.benefit_status" },
+      pension_year: { type: "number", label: "养老缴费年度", expr: "pp.year" },
+      payment_status: { type: "enum", label: "养老缴费状态", expr: "pp.payment_status", enumValues: ["已缴","未缴"] },
+      tier_amount: { type: "number", label: "缴费档次", expr: "pp.tier_amount" },
+      paid_amount: { type: "number", label: "实缴金额", expr: "pp.paid_amount" },
+      payment_date: { type: "date", label: "缴费日期", expr: "pp.payment_date" },
+      subsidy_amount: { type: "number", label: "补贴金额", expr: "pp.subsidy_amount" },
+      welfare_type: { type: "string", label: "关爱事项", expr: "w.welfare_type" },
+      welfare_status: { type: "string", label: "关爱状态", expr: "w.status" },
+      welfare_start_date: { type: "date", label: "关爱开始日期", expr: "w.start_date" },
+      welfare_end_date: { type: "date", label: "关爱结束日期", expr: "w.end_date" },
+      event: { type: "string", label: "应急事件", expr: "ev.event_name" },
+      event_type: { type: "string", label: "事件类型", expr: "ev.event_type" },
+      event_start: { type: "date", label: "事件开始时间", expr: "ev.start_time" },
+      age_at_event: { type: "number", label: "事件发生时年龄", expr: "EXTRACT(YEAR FROM age(ev.start_time,p.birth_date))::int" },
+      evacuation_time: { type: "date", label: "转移时间", expr: "e.evacuation_time" },
+      shelter: { type: "string", label: "安置地点", expr: "e.shelter" },
+      evacuation_status: { type: "string", label: "转移状态", expr: "e.status" },
     },
   },
   households: {
@@ -191,7 +236,7 @@ async function planQuery(query: string, referenceContext: any, uploadedSchema?: 
     : uploadedCatalog.length
       ? `\n当前可用管理员上传结构化资料（dataset必须写uploaded:后面的精确asset_id，禁止用标题冒充ID）：\n${uploadedCatalog.map((a:any)=>`- uploaded:${a.asset_id}，标题=${a.title}，分类=${a.category || ""}，字段=${a.fields.join("/")}`).join("\n")}` : "";
   const { text, model } = await callGateway([
-    { role: "system", content: `你是黄林坑村治理AI的结构化查询规划器。你只负责把自然语言转换成受控 QuerySpec，不写SQL，不回答用户。\n\n可用系统数据集：\n${schemaPrompt(defs)}${uploadedInfo}\n\n允许操作符：eq,neq,gt,gte,lt,lte,between,in,contains,not_contains,is_null,not_null。允许聚合：count,count_distinct,sum,avg,min,max。\n\n硬规则：\n1. 必须完整保留用户说出的每一个实质查询约束：年龄、姓名、性别、村组、年度、金额、日期、状态、标签、地址、事件、政策领域等，禁止静默丢条件。\n2. 不得凭空增加用户没说的过滤条件。\n3. “70岁以上”只能理解为年龄>=70，绝不能把“岁以上/以上/的人数”等理解为姓名。\n4. 姓名只有在用户明确提到具体人名时才生成 name 过滤。\n5. “2组或3组”使用 in；“65到80岁”使用 between；“不是/不含”使用 neq/not_contains。\n6. 用户问“人数”时，people/welfare/evacuations优先 count_distinct(person_id)，记录数才用 count；金额合计用 sum。\n7. 用户要求名单/明细时 output=rows 或 both，并在select中保留相关字段。\n8. 当前有锁定资料时只能使用上方列出的对应dataset；管理员上传资料dataset写uploaded:<asset_id>，字段必须使用真实字段名。\n9. 如果用户表达无法由现有字段可靠表示，设置unsupported=true并说明原因，不要近似执行。\n10. 输出严格JSON，不要Markdown。\n\nJSON格式：{"dataset":"从上方可用dataset中选一个，或uploaded:<asset_id>","user_constraints":["逐条列出用户约束"],"filters":[{"field":"字段ID","op":"gte","value":70}],"aggregate":{"op":"count_distinct","field":"person_id"},"group_by":[],"select":[],"sort":[],"limit":200,"output":"summary|rows|both","unsupported":false,"unsupported_reason":""}` },
+    { role: "system", content: `你是黄林坑村治理AI的结构化查询规划器。你只负责把自然语言转换成受控 QuerySpec，不写SQL，不回答用户。\n\n可用系统数据集：\n${schemaPrompt(defs)}${uploadedInfo}\n\n允许操作符：eq,neq,gt,gte,lt,lte,between,in,contains,not_contains,is_null,not_null。允许聚合：count,count_distinct,sum,avg,min,max。\n\n硬规则：\n1. 必须完整保留用户说出的每一个实质查询约束：年龄、姓名、性别、村组、年度、金额、日期、状态、标签、地址、事件、政策领域等，禁止静默丢条件。\n2. 不得凭空增加用户没说的过滤条件。\n3. “70岁以上”只能理解为年龄>=70，绝不能把“岁以上/以上/的人数”等理解为姓名。\n4. 姓名只有在用户明确提到具体人名时才生成 name 过滤。\n5. “2组或3组”使用 in；“65到80岁”使用 between；“不是/不含”使用 neq/not_contains。\n6. 用户问“人数”时，people/welfare/evacuations/people_governance优先 count_distinct(person_id)，记录数才用 count；金额合计用 sum。\n7. 一个问题同时包含人口 + 养老 + 民政/关爱 + 应急等跨域“人员筛选”条件时，使用 people_governance；该数据集只用于人员去重计数或人员名单，不用于金额求和/平均值。\n7.1 用户要求名单/明细时 output=rows 或 both，并在select中保留相关字段。\n8. 当前有锁定资料时只能使用上方列出的对应dataset；管理员上传资料dataset写uploaded:<asset_id>，字段必须使用真实字段名。\n9. 如果用户表达无法由现有字段可靠表示，设置unsupported=true并说明原因，不要近似执行。\n10. 输出严格JSON，不要Markdown。\n\nJSON格式：{"dataset":"从上方可用dataset中选一个，或uploaded:<asset_id>","user_constraints":["逐条列出用户约束"],"filters":[{"field":"字段ID","op":"gte","value":70}],"aggregate":{"op":"count_distinct","field":"person_id"},"group_by":[],"select":[],"sort":[],"limit":200,"output":"summary|rows|both","unsupported":false,"unsupported_reason":""}` },
     { role: "user", content: `用户问题：${query}\n当前参考资料：${JSON.stringify(referenceContext || null)}` },
   ], true);
   return { raw: parseJsonObject(text), model };
@@ -234,6 +279,9 @@ function validateSpec(spec: any, def?: DatasetDef, uploaded?: any) {
     if (spec.aggregate.field && !fieldMap[spec.aggregate.field]) errors.push(`aggregate未知字段:${spec.aggregate.field}`);
     if (["sum","avg"].includes(spec.aggregate.op) && fieldMap[spec.aggregate.field]?.type !== "number") errors.push(`${spec.aggregate.op}只能用于数字字段`);
   }
+  if (def?.id === "people_governance" && spec.aggregate) {
+    if (spec.aggregate.op !== "count_distinct" || spec.aggregate.field !== "person_id") errors.push("people_governance聚合只允许count_distinct(person_id)，避免一对多Join导致重复统计");
+  }
   for (const f of spec.group_by || []) if (!fieldMap[f]) errors.push(`group_by未知字段:${f}`);
   for (const f of spec.select || []) if (!fieldMap[f]) errors.push(`select未知字段:${f}`);
   for (const s of spec.sort || []) if (!fieldMap[s?.field] || !["asc","desc"].includes(s?.direction)) errors.push(`非法sort:${JSON.stringify(s)}`);
@@ -275,7 +323,8 @@ function compileBuiltIn(def: DatasetDef, spec: QuerySpec) {
   }
   const sortSql = (spec.sort || []).map(s => `${def.fields[s.field].expr} ${s.direction.toUpperCase()}`).join(",");
   const limit = Math.min(500, Math.max(1, Number(spec.limit || (spec.aggregate ? 100 : 200))));
-  const sql = `SELECT ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;
+  const selectPrefix = !spec.aggregate && def.distinctRows ? "SELECT DISTINCT" : "SELECT";
+  const sql = `${selectPrefix} ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;
   return { sql, params, columns: aliases };
 }
 
