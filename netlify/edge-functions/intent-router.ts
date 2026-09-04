@@ -46,7 +46,7 @@ async function chatResponse(q:string) {
 
 function helpResponse(q:string) {
   let answer = "我可以正常聊天，也可以通过Agent搜索已发布资料、查询结构化治理数据，并在回答里保留依据。";
-  if (/你的头像|AI村长头像|头像呢|头像没了|头像不见了/.test(q)) answer = "AI村长头像应该显示在每条回答左侧。当前页面会优先加载站点头像资源，如果浏览器缓存或资源加载异常，也会自动使用内置的同一张头像作为兜底。";
+  if (/你的头像|AI村长头像|头像呢|头像没了|头像不见了/.test(q)) answer = "AI村长头像应该显示在每条回答左侧。当前页面会使用带版本号的头像地址避免旧缓存；如果第一次加载失败，会再尝试原始头像文件。";
   else if (/上传/.test(q)) answer = "管理员可从右上角“演示管理员 → 数据治理”上传资料，确认发布后才进入AI可查询范围。";
   else if (/删除/.test(q)) answer = "进入“演示管理员 → 数据治理 → 最近上传”，管理员上传资料右侧可删除；系统内置台账不可删除。";
   else if (/依据|执行过程/.test(q)) answer = "工作回答底部可以打开“查看依据”和“执行过程”。V0.5.3 会显示Agent选择了什么能力、检索了哪些资料，以及结构化查询真正生效的条件。";
@@ -80,7 +80,7 @@ async function forwardToAgent(req:Request, context:Context) {
 async function rewriteStatus(context:Context) {
   const response = await context.next(); if (!response.ok) return response;
   try {
-    const data:any = await response.json(); data.version = "0.5.3.1"; data.intent_router = "minimal-shortcuts"; data.agent_planner = "v053"; data.query_kernel = "queryspec-v052"; data.knowledge_retrieval = "hybrid-v053";
+    const data:any = await response.json(); data.version = "0.5.3.2"; data.intent_router = "minimal-shortcuts"; data.agent_planner = "v053"; data.query_kernel = "queryspec-v052"; data.knowledge_retrieval = "hybrid-v053";
     return Response.json(data,{status:response.status});
   } catch { return response; }
 }
