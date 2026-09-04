@@ -34,21 +34,24 @@ function isSystemHelp(q: string) {
   return /(怎么用|如何使用|这个系统|你能做什么|你会什么|怎么上传|如何上传|上传资料|上传文件|怎么删除|如何删除|删除资料|删除文件|数据治理|确认发布|怎么发布|如何发布|查看依据|执行过程|怎么导出|如何导出|导出结果|参考数据在哪里|管理员入口|历史记录在哪里)/.test(q);
 }
 
-function governanceSignal(q: string) {
+function governanceTopic(q: string) {
   return /(人口|村民|多少人|几个人|年龄|岁以上|岁以下|家庭|户籍|家庭户|村组|姓名|性别|出生|住址|养老|养老金|缴费|参保|待遇|低保|独居|高龄|残疾|行动不便|关爱|救助|民政|台风|防汛|防灾|转移|安置|应急|费用|支出|金额|政策|规定|条款|办法|依据|台账)/.test(q);
 }
 
 function explicitWorkIntent(q: string) {
-  return /(查一下|查询|查查|查|看看|看下|统计|筛选|调出来|列出|汇总|合计|总额|多少|几个|几人|谁|哪些|名单|明细|记录|情况|有没有|是否|未缴|已缴|以上|以下|大于|小于|政策依据|怎么规定|什么政策|哪条规定|哪项政策)/.test(q);
+  return /(查一下|查询|查查|查|看看|看下|统计|筛选|调出来|列出|汇总|合计|总额|多少|几个|几人|谁|哪些|名单|明细|记录|有没有|是否|未缴|已缴|以上|以下|大于|小于|政策依据|怎么规定|什么政策|哪条规定|哪项政策)/.test(q);
+}
+
+function isPersonSituationQuery(q: string) {
+  return /(?:查|看|查询|看看|关于)?\s*([\u4e00-\u9fa5]{2,4})(?:的|过去|历年|养老|缴费|情况)/.test(q);
 }
 
 function backendRoutable(q: string, referenceContext: any) {
-  const contextId = text(referenceContext?.asset_id);
-  if (contextId) return true;
-  if (governanceSignal(q)) return true;
+  if (text(referenceContext?.asset_id)) return true;
+  if (governanceTopic(q)) return true;
   if (/(\d{2,3})\s*岁(?:以上|及以上|起)/.test(q)) return true;
   if (/([1-9]\d*)组/.test(q)) return true;
-  if (/(?:查|看|查询|看看|关于)?\s*([\u4e00-\u9fa5]{2,4})(?:的|过去|历年|养老|缴费|情况)/.test(q)) return true;
+  if (isPersonSituationQuery(q)) return true;
   return false;
 }
 
@@ -58,14 +61,14 @@ function ruleDecision(q: string, referenceContext: any, pathname: string): Inten
 
   const activeDocument = pathname === "/api/reference/document/query" || referenceContext?.asset_type === "document";
   if (activeDocument) {
-    if (governanceSignal(q) && explicitWorkIntent(q) && !/(方案|文档|资料|文件|预算|流程|人员配置|活动|其中|里面|上述|本方案|该方案)/.test(q)) {
+    const documentWords = /(方案|文档|资料|文件|预算|流程|人员配置|活动|其中|里面|上述|本方案|该方案)/.test(q);
+    if (governanceTopic(q) && explicitWorkIntent(q) && !documentWords) {
       return { mode: "governance_query", confidence: 0.9, reason: "当前锁定文档，但问题明确转向村级治理数据", source: "rule" };
     }
     return { mode: "document_query", confidence: 0.92, reason: "当前已锁定文档，上下文优先", source: "rule" };
   }
 
-  const nameQuery = /(?:查|看|查询|看看|关于)?\s*([\u4e00-\u9fa5]{2,4})(?:的|过去|历年|养老|缴费|情况)/.test(q);
-  if ((governanceSignal(q) && explicitWorkIntent(q)) || nameQuery) {
+  if ((governanceTopic(q) && explicitWorkIntent(q)) || isPersonSituationQuery(q)) {
     return { mode: "governance_query", confidence: 0.92, reason: "命中明确治理查询意图", source: "rule" };
   }
   return null;
@@ -213,16 +216,6 @@ async function handleApi(req: Request, context: Context, pathname: string) {
   return clarifyResponse({ mode: "clarify", confidence: 0.4, source: "fallback" });
 }
 
-async function injectIntentUi(context: Context) {
-  const response = await context.next();
-  if (!response.ok) return response;
-  const source = await response.text();
-  const headers = new Headers(response.headers);
-  headers.delete("content-length");
-  headers.set("Content-Type", "text/javascript; charset=utf-8");
-  return new Response(`${source}\n;import(\"./intent-ui.js\").catch(()=>{});\n`, { status: response.status, headers });
-}
-
 async function rewriteStatus(context: Context) {
   const response = await context.next();
   if (!response.ok) return response;
@@ -238,12 +231,11 @@ async function rewriteStatus(context: Context) {
 
 export default async (req: Request, context: Context) => {
   const pathname = new URL(req.url).pathname;
-  if (pathname === "/docx-integration.js" && req.method === "GET") return injectIntentUi(context);
   if (pathname === "/api/status" && req.method === "GET") return rewriteStatus(context);
   if (pathname === "/api/query" || pathname === "/api/reference/document/query") return handleApi(req, context, pathname);
   return context.next();
 };
 
 export const config: Config = {
-  path: ["/api/query", "/api/reference/document/query", "/api/status", "/docx-integration.js"],
+  path: ["/api/query", "/api/reference/document/query", "/api/status"],
 };
