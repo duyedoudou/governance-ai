@@ -1,4 +1,5 @@
 # trigger: restore V0.4.9 source after workflow registration
+# retrigger: 2026-09-04 DOCX parser work
 name: Bootstrap project source
 
 on:
