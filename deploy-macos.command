@@ -1,14 +1,14 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v050-deploy.log"
+LOG="$PWD/netlify-v051-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
 SITE_ID="89dfa228-952e-4712-8a99-9344cb0ea5fd"
 BACKUP_DIR="$PWD/.migration-backup-$(date +%Y%m%d-%H%M%S)"
 
-echo "=== 黄林坑村治理智能助手 V0.5.0 部署修复版 ==="
-echo "DOCX结构化回答 + 上传资料删除 + production migration 自动同步"
+echo "=== 黄林坑村治理智能助手 V0.5.1 部署 ==="
+echo "对话意图路由 + DOCX结构化回答 + 上传资料删除 + AI村长头像"
 echo "目录: $PWD"
 
 echo "\n[1/8] 检查 Node / npm"
@@ -46,7 +46,7 @@ cat > .netlify/state.json <<STATE
 STATE
 npx netlify status || true
 
-echo "\n[6/8] 修复并同步 production migration 历史"
+echo "\n[6/8] 同步 production migration 历史"
 echo "说明：只同步 migration 文件，不会删除或重建生产数据库。"
 mkdir -p "$BACKUP_DIR"
 if [ -d netlify/database/migrations ]; then
@@ -79,7 +79,7 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "本次版本：V0.5.0 最新修复版（DOCX结构化回答 + 上传资料删除）。"
+  echo "本次版本：V0.5.1（闲聊/工作意图路由 + DOCX问答 + 资料删除 + AI村长头像）。"
   echo "production migration 历史已与 Netlify Database 对齐。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
