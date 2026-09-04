@@ -1,11 +1,11 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v049-deploy.log"
+LOG="$PWD/netlify-v050-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
-echo "=== 黄林坑村治理智能助手 V0.4.9 部署 ==="
-echo "Civic AI Design System UI + AI村长头像 + 原有治理能力"
+echo "=== 黄林坑村治理智能助手 V0.5.0 部署 ==="
+echo "Civic AI UI + AI村长 + 数据治理 + DOCX 全文解析/问答"
 echo "目录: $PWD"
 
 echo "\n[1/7] 检查 Node / npm"
@@ -56,7 +56,7 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "沿用现有 production Database / Functions / Blobs，更新 V0.4.9 查询路由修复、前端 UI、AI村长头像与交互代码。"
+  echo "本次部署版本：V0.5.0（主查询 API + 数据治理/版本管理 + DOCX 全文解析与专用问答）。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
   echo "\n部署没有完成。完整日志：$LOG"
