@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="robots" content="noindex,nofollow" />
   <meta name="theme-color" content="#F8FAFD" />
-  <title>黄林坑村治理智能助手 · V0.4.9</title>
+  <title>黄林坑村治理智能助手 · V0.5.0</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -161,9 +161,9 @@
           <input type="file" id="governanceFile" accept=".xlsx,.xls,.csv,.json,.txt,.md,.pdf,.doc,.docx" hidden />
           <span class="upload-symbol" aria-hidden="true">↑</span>
           <h2>上传已清洗数据</h2>
-          <p>结构化文件可解析入库；文档可保存源文件并完成分类归档。</p>
+          <p>Excel / CSV / JSON 可解析入库；DOCX 会自动提取正文后供 AI 查询；PDF / 旧版 DOC 当前仍保存源文件并分类归档。</p>
           <button class="primary-btn" id="chooseFileBtn">选择文件</button>
-          <small>上传成功不代表 AI 可用，必须完成发布确认。</small>
+          <small>上传成功不代表 AI 可用，仍需完成发布确认。</small>
         </div>
 
         <div id="classificationReview"></div>
@@ -198,5 +198,6 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
   <script src="./app.js"></script>
+  <script src="./docx-integration.js"></script>
 </body>
 </html>
