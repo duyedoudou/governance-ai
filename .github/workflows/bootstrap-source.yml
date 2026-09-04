@@ -1,4 +1,4 @@
-# diagnostic: locate corrupt bootstrap chunk before V0.5.0 DOCX parser work
+# salvage diagnostic: recover complete files before xz corruption
 name: Bootstrap project source
 
 on:
@@ -14,23 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Diagnose bootstrap chunks
+      - name: Salvage bootstrap archive
         shell: bash
         run: |
-          set -euo pipefail
-          echo '--- sizes / sha256 ---'
-          wc -c .bootstrap/part-*
-          sha256sum .bootstrap/part-*
-          echo '--- compare original 03 vs split 03 ---'
-          cat .bootstrap/part-03a .bootstrap/part-03b .bootstrap/part-03c .bootstrap/part-03d > /tmp/part03-split
-          wc -c .bootstrap/part-03 /tmp/part03-split
-          sha256sum .bootstrap/part-03 /tmp/part03-split
-          cmp -l .bootstrap/part-03 /tmp/part03-split | head -20 || true
-          echo '--- test main variants ---'
-          for mode in original split; do
-            if [ "$mode" = original ]; then middle='.bootstrap/part-03'; else middle='/tmp/part03-split'; fi
-            cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 "$middle" .bootstrap/part-04 .bootstrap/part-05 .bootstrap/part-06 .bootstrap/part-07 .bootstrap/part-08 > "/tmp/$mode.b64"
-            base64 -d "/tmp/$mode.b64" > "/tmp/$mode.tar.xz"
-            echo "$mode decoded bytes: $(wc -c < /tmp/$mode.tar.xz)"
-            xz -t "/tmp/$mode.tar.xz" && echo "$mode OK" || echo "$mode BAD"
+          set -u
+          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04 .bootstrap/part-05 .bootstrap/part-06 .bootstrap/part-07 .bootstrap/part-08 > /tmp/core.b64
+          base64 -d /tmp/core.b64 > /tmp/core.tar.xz
+          mkdir -p /tmp/recover
+          xz -dc /tmp/core.tar.xz > /tmp/core.tar 2>/tmp/xz.err || true
+          echo "partial tar bytes: $(wc -c < /tmp/core.tar)"
+          cat /tmp/xz.err || true
+          tar -xvf /tmp/core.tar -C /tmp/recover 2>/tmp/tar.err || true
+          echo '--- recovered files ---'
+          find /tmp/recover -type f -printf '%P %s bytes\n' | sort
+          echo '--- tar error ---'
+          cat /tmp/tar.err || true
+          echo '--- key files ---'
+          for f in site/index.html site/app.js site/styles.css netlify/functions/api.mts netlify/database/migrations/004_dataset-versioning/migration.sql; do
+            if [ -f "/tmp/recover/$f" ]; then echo "FOUND $f $(wc -c < /tmp/recover/$f)"; else echo "MISSING $f"; fi
           done
