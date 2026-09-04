@@ -1,7 +1,7 @@
 {
-  "name": "huanglinkeng-rural-governance-agent-v052",
+  "name": "huanglinkeng-rural-governance-agent-v053",
   "private": true,
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "dependencies": {
     "@netlify/blobs": "latest",
