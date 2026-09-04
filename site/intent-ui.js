@@ -15,6 +15,30 @@
   `;
   document.head.appendChild(style);
 
+  function bindAvatar(img){
+    if(!(img instanceof HTMLImageElement) || !img.classList.contains("assistant-avatar")) return;
+    img.onerror = null;
+    if(!img.dataset.avatarGuard){
+      img.dataset.avatarGuard = "1";
+      img.addEventListener("error", () => {
+        img.onerror = null;
+        img.src = "/assets/ai-village-chief-fallback.png?v=0533";
+      }, { once:true });
+    }
+    const wanted = new URL("/assets/ai-village-chief.png?v=0533", location.origin).href;
+    if(img.src !== wanted) img.src = wanted;
+  }
+  document.querySelectorAll("img.assistant-avatar").forEach(bindAvatar);
+  new MutationObserver(records => {
+    for(const r of records){
+      for(const n of r.addedNodes){
+        if(!(n instanceof Element)) continue;
+        if(n.matches?.("img.assistant-avatar")) bindAvatar(n);
+        n.querySelectorAll?.("img.assistant-avatar").forEach(bindAvatar);
+      }
+    }
+  }).observe(document.body,{childList:true,subtree:true});
+
   const baseRenderResult = renderResult;
   renderResult = function renderResultWithIntentMode(payload, id) {
     const r = payload?.result || {};
