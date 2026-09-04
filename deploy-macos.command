@@ -1,14 +1,14 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v053-deploy.log"
+LOG="$PWD/netlify-v0531-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
 SITE_ID="89dfa228-952e-4712-8a99-9344cb0ea5fd"
 BACKUP_DIR="$PWD/.migration-backup-$(date +%Y%m%d-%H%M%S)"
 
-echo "=== 黄林坑村治理智能助手 V0.5.3 部署 ==="
-echo "Agent Planner + 全局知识检索 + Hybrid Search + 多源融合 + V0.5.2 QuerySpec"
+echo "=== 黄林坑村治理智能助手 V0.5.3.1 回归修复部署 ==="
+echo "V0.5.3.1：基础聊天/头像回归修复 + Agent Planner + 全局知识检索 + Hybrid Search + V0.5.2 QuerySpec"
 echo "目录: $PWD"
 
 echo "\n[1/8] 检查 Node / npm"
@@ -93,8 +93,8 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "本次版本：V0.5.3（Agent Planner + 全局知识检索 + Hybrid Search + 多源融合 + QuerySpec）。"
-  echo "请重点回归：蜂蜜生产情况、70岁以上人数、跨域人员筛选、多资料同主题融合、资料冲突提示。"
+  echo "本次版本：V0.5.3.1（AI村长头像兜底 + 基础聊天稳定性 + Agent错误边界 + V0.5.3知识检索）。"
+  echo "请重点回归：来聊天、你的头像呢、蜂蜜生产情况、70岁以上人数、跨域人员筛选。"
   echo "production migration 历史已对齐；006_knowledge-retrieval 会作为新增 migration 应用。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
