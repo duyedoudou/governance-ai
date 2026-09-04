@@ -35,7 +35,7 @@ function isSystemHelp(q: string) {
 }
 
 function governanceSignal(q: string) {
-  return /(人口|村民|多少人|几个人|人员|名单|年龄|岁以上|岁以下|家庭|户籍|家庭户|村组|姓名|性别|出生|住址|养老|养老金|缴费|参保|待遇|低保|独居|高龄|残疾|行动不便|关爱|救助|民政|台风|防汛|防灾|转移|安置|应急|费用|支出|金额|政策|规定|条款|办法|依据|台账)/.test(q);
+  return /(人口|村民|多少人|几个人|年龄|岁以上|岁以下|家庭|户籍|家庭户|村组|姓名|性别|出生|住址|养老|养老金|缴费|参保|待遇|低保|独居|高龄|残疾|行动不便|关爱|救助|民政|台风|防汛|防灾|转移|安置|应急|费用|支出|金额|政策|规定|条款|办法|依据|台账)/.test(q);
 }
 
 function backendRoutable(q: string, referenceContext: any) {
@@ -187,9 +187,11 @@ async function handleApi(req: Request, context: Context, pathname: string) {
     if (pathname === "/api/reference/document/query") {
       const url = new URL(req.url);
       url.pathname = "/api/query";
+      const headers = new Headers(req.headers);
+      headers.delete("content-length");
       const forwarded = new Request(url.toString(), {
         method: "POST",
-        headers: req.headers,
+        headers,
         body: JSON.stringify({ ...body, reference_context: null }),
       });
       return context.nextRequest(forwarded);
@@ -207,19 +209,35 @@ async function handleApi(req: Request, context: Context, pathname: string) {
 
 async function injectIntentUi(context: Context) {
   const response = await context.next();
+  if (!response.ok) return response;
   const source = await response.text();
   const headers = new Headers(response.headers);
+  headers.delete("content-length");
   headers.set("Content-Type", "text/javascript; charset=utf-8");
   return new Response(`${source}\n;import(\"./intent-ui.js\").catch(()=>{});\n`, { status: response.status, headers });
+}
+
+async function rewriteStatus(context: Context) {
+  const response = await context.next();
+  if (!response.ok) return response;
+  try {
+    const data: any = await response.json();
+    data.version = "0.5.1";
+    data.intent_router = true;
+    return Response.json(data, { status: response.status });
+  } catch {
+    return response;
+  }
 }
 
 export default async (req: Request, context: Context) => {
   const pathname = new URL(req.url).pathname;
   if (pathname === "/docx-integration.js" && req.method === "GET") return injectIntentUi(context);
+  if (pathname === "/api/status" && req.method === "GET") return rewriteStatus(context);
   if (pathname === "/api/query" || pathname === "/api/reference/document/query") return handleApi(req, context, pathname);
   return context.next();
 };
 
 export const config: Config = {
-  path: ["/api/query", "/api/reference/document/query", "/docx-integration.js"],
+  path: ["/api/query", "/api/reference/document/query", "/api/status", "/docx-integration.js"],
 };
