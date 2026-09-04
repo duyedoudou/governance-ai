@@ -1,0 +1,47 @@
+name: V0.5.0 DOCX parser check
+
+on:
+  push:
+    paths:
+      - 'netlify/functions/docx.mts'
+      - 'site/docx-integration.js'
+      - 'site/index.html'
+      - 'package.json'
+      - '.github/workflows/v050-docx-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Check browser integration syntax
+        run: node --check site/docx-integration.js
+      - name: Bundle DOCX function
+        run: npx --yes esbuild netlify/functions/docx.mts --bundle --platform=node --format=esm --outfile=/tmp/docx.mjs --external:@netlify/functions --external:@netlify/database --external:@netlify/blobs
+      - name: Verify Mammoth can extract a minimal DOCX
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          p=Path('/tmp/test.docx')
+          with zipfile.ZipFile(p,'w') as z:
+              z.writestr('[Content_Types].xml','''<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>''')
+              z.writestr('_rels/.rels','''<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>''')
+              z.writestr('word/document.xml','''<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>黄林坑村 DOCX 正文解析测试成功</w:t></w:r></w:p><w:sectPr/></w:body></w:document>''')
+          PY
+          node - <<'NODE'
+          const fs=require('fs');
+          const mammoth=require('mammoth');
+          mammoth.extractRawText({buffer:fs.readFileSync('/tmp/test.docx')}).then(r=>{
+            if(!r.value.includes('黄林坑村 DOCX 正文解析测试成功')) process.exit(1);
+            console.log(r.value.trim());
+          }).catch(e=>{console.error(e);process.exit(1)});
+          NODE
