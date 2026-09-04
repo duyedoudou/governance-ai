@@ -1,0 +1,69 @@
+name: Complete V0.5.0 demo seed
+
+on:
+  push:
+    paths:
+      - '.github/workflows/complete-demo-seed.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate complete pension and evacuation supplement
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib
+          root=pathlib.Path('data/demo-snapshot-v050')
+          out=pathlib.Path('netlify/database/migrations/005_complete-demo-snapshot/migration.sql')
+          out.parent.mkdir(parents=True,exist_ok=True)
+          def rows(n): return json.loads((root/f'{n}.json').read_text(encoding='utf-8'))['rows']
+          people=rows('sys-people'); pension=rows('sys-pension'); evac=rows('sys-evacuations')
+          by={(r['姓名'],r['村组']):r for r in people}
+          def q(v):
+              if v is None:return 'NULL'
+              return "'"+str(v).replace("'","''")+"'"
+          def date(v): return 'NULL' if not v else q(str(v)[:10])
+          def ts(v): return 'NULL' if not v else q(str(v).replace('T',' ').replace('.000Z','').replace('Z',''))
+          sql=['-- V0.5.0 supplement generated from the complete public demo snapshot.','-- All records are fictional and for product testing only.','']
+          vals=[]
+          for i,r in enumerate(pension,1):
+              p=by.get((r.get('姓名'),r.get('村组')))
+              if not p: raise SystemExit(f"missing person for pension row {i}: {r}")
+              vals.append(f"({q('PP%04d'%i)},{q(p['人员ID'])},{int(r['年度'])},{q(r.get('缴费状态'))},{q(r.get('缴费档次'))}::numeric,{q(r.get('实缴金额'))}::numeric,{date(r.get('缴费日期'))},{q(r.get('补贴金额'))}::numeric,'demo-snapshot-v050')")
+          sql += ['INSERT INTO pension_payments (payment_id,person_id,year,payment_status,tier_amount,paid_amount,payment_date,subsidy_amount,source_doc_id) VALUES',',\n'.join(vals),"ON CONFLICT (payment_id) DO UPDATE SET person_id=EXCLUDED.person_id,year=EXCLUDED.year,payment_status=EXCLUDED.payment_status,tier_amount=EXCLUDED.tier_amount,paid_amount=EXCLUDED.paid_amount,payment_date=EXCLUDED.payment_date,subsidy_amount=EXCLUDED.subsidy_amount,source_doc_id=EXCLUDED.source_doc_id;",'']
+          vals=[]
+          for i,r in enumerate(evac,1):
+              p=by.get((r.get('姓名'),r.get('村组')))
+              if not p: raise SystemExit(f"missing person for evacuation row {i}: {r}")
+              event=q(r.get('事件'))
+              vals.append(f"({q('EA%04d'%i)},(SELECT event_id FROM events WHERE event_name={event} ORDER BY start_time DESC LIMIT 1),{q(p['人员ID'])},{q(p.get('家庭ID'))},{ts(r.get('转移时间'))},{q(r.get('安置地点'))},{q(r.get('转移原因'))},{ts(r.get('返回时间'))},{q(r.get('状态'))},'demo-snapshot-v050')")
+          sql += ['INSERT INTO evacuations (evacuation_id,event_id,person_id,household_id,evacuation_time,shelter,reason,return_time,status,source_doc_id) VALUES',',\n'.join(vals),"ON CONFLICT (evacuation_id) DO UPDATE SET event_id=EXCLUDED.event_id,person_id=EXCLUDED.person_id,household_id=EXCLUDED.household_id,evacuation_time=EXCLUDED.evacuation_time,shelter=EXCLUDED.shelter,reason=EXCLUDED.reason,return_time=EXCLUDED.return_time,status=EXCLUDED.status,source_doc_id=EXCLUDED.source_doc_id;",'']
+          out.write_text('\n'.join(sql),encoding='utf-8')
+          print('pension rows',len(pension),'evacuation rows',len(evac),'bytes',out.stat().st_size)
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('netlify/database/migrations/005_complete-demo-snapshot/migration.sql')
+          b=p.read_bytes(); b.decode('utf-8'); assert b'\x00' not in b
+          print('utf8 ok',len(b))
+          PY
+      - name: Commit supplement
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add netlify/database/migrations/005_complete-demo-snapshot/migration.sql
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'data: add complete V0.5.0 demo seed supplement'
+          git pull --rebase origin main
+          git push origin main
