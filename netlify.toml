@@ -1,6 +1,6 @@
 [build]
   publish = "site"
-  command = "echo V0.4.8 全表路由自检 + AI村长 avatar"
+  command = "echo V0.5.0 governance agent + DOCX full-text QA"
 
 [functions]
   directory = "netlify/functions"
