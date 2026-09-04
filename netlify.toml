@@ -1,6 +1,6 @@
 [build]
   publish = "site"
-  command = "echo V0.5.0 governance agent + DOCX full-text QA"
+  command = "echo V0.5.3 governance agent + Agent Planner + Hybrid Search"
 
 [functions]
   directory = "netlify/functions"
