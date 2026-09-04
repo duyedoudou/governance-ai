@@ -1,0 +1,61 @@
+name: V0.5.3.2 frontend contract check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/v0532-frontend-contract-check.yml'
+  workflow_dispatch:
+
+jobs:
+  frontend-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: JavaScript syntax
+        run: |
+          node --check site/app.js
+          node --check site/docx-integration.js
+          node --check site/intent-ui.js
+      - name: Reject stale DOM selectors
+        run: |
+          ! grep -Eq "#(referenceHome|referenceCategory|referenceAsset|fileInput|uploadBtn|reviewEmpty|reviewPanel|categoryConfirm)" site/app.js
+      - name: Check critical DOM contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re, sys
+          html = Path('site/index.html').read_text()
+          app = Path('site/app.js').read_text()
+          ids = set(re.findall(r'id="([^"]+)"', html))
+          required = {
+            'dataStatus','moreMenuBtn','userMenuBtn','mobileMenuBtn','messages','conversationScroll',
+            'activeReferenceContext','activeReferenceTitle','clearReferenceContext','queryInput','sendBtn',
+            'contextDomain','contextDetail','referenceBreadcrumbs','referenceContent','governanceFile',
+            'uploadZone','chooseFileBtn','classificationReview','uploadList','drawerBackdrop','detailDrawer',
+            'drawerTitle','drawerEyebrow','drawerBody','drawerClose','toast'
+          }
+          missing = sorted(required - ids)
+          if missing:
+            print('Missing IDs in index.html:', missing)
+            sys.exit(1)
+          for critical in ['referenceContent','governanceFile','chooseFileBtn','classificationReview','uploadList']:
+            if f"#{critical}" not in app:
+              print('app.js no longer references critical ID:', critical)
+              sys.exit(1)
+          print('DOM contract OK')
+          PY
+      - name: Check AI village chief avatar
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('site/assets/ai-village-chief.png')
+          b=p.read_bytes()
+          assert len(b) > 1024, 'avatar file is unexpectedly small'
+          assert b[:8] == b'\x89PNG\r\n\x1a\n', 'avatar is not a valid PNG signature'
+          print('avatar OK', len(b), 'bytes')
+          PY
