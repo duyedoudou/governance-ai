@@ -1,0 +1,38 @@
+name: V0.5.3 Agent Knowledge Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netlify/functions/agent-v053.mts'
+      - 'netlify/functions/knowledge.mts'
+      - 'netlify/lib/knowledge-core.mts'
+      - 'netlify/edge-functions/intent-router.ts'
+      - 'netlify/database/migrations/006_knowledge-retrieval/**'
+      - 'deploy-macos.command'
+  workflow_dispatch:
+
+jobs:
+  static-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Bundle Agent Function
+        run: npx esbuild netlify/functions/agent-v053.mts --bundle --platform=node --format=esm --outfile=/tmp/agent-v053.mjs --external:@netlify/*
+      - name: Bundle Knowledge Function
+        run: npx esbuild netlify/functions/knowledge.mts --bundle --platform=node --format=esm --outfile=/tmp/knowledge.mjs --external:@netlify/*
+      - name: Bundle Edge Router
+        run: npx esbuild netlify/edge-functions/intent-router.ts --bundle --platform=browser --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/*
+      - name: Shell deploy script syntax
+        run: bash -n deploy-macos.command
+      - name: V0.5.3 invariants
+        run: |
+          grep -q 'Agent Planner' netlify/functions/agent-v053.mts
+          grep -q 'knowledge_search' netlify/functions/agent-v053.mts
+          grep -q 'search_tokens' netlify/database/migrations/006_knowledge-retrieval/migration.sql
+          grep -q 'embedding' netlify/database/migrations/006_knowledge-retrieval/migration.sql
+          grep -q 'conflicts' netlify/lib/knowledge-core.mts
