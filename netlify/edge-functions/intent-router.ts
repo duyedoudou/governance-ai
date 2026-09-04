@@ -38,6 +38,10 @@ function governanceSignal(q: string) {
   return /(人口|村民|多少人|几个人|年龄|岁以上|岁以下|家庭|户籍|家庭户|村组|姓名|性别|出生|住址|养老|养老金|缴费|参保|待遇|低保|独居|高龄|残疾|行动不便|关爱|救助|民政|台风|防汛|防灾|转移|安置|应急|费用|支出|金额|政策|规定|条款|办法|依据|台账)/.test(q);
 }
 
+function explicitWorkIntent(q: string) {
+  return /(查一下|查询|查查|查|看看|看下|统计|筛选|调出来|列出|汇总|合计|总额|多少|几个|几人|谁|哪些|名单|明细|记录|情况|有没有|是否|未缴|已缴|以上|以下|大于|小于|政策依据|怎么规定|什么政策|哪条规定|哪项政策)/.test(q);
+}
+
 function backendRoutable(q: string, referenceContext: any) {
   const contextId = text(referenceContext?.asset_id);
   if (contextId) return true;
@@ -54,14 +58,15 @@ function ruleDecision(q: string, referenceContext: any, pathname: string): Inten
 
   const activeDocument = pathname === "/api/reference/document/query" || referenceContext?.asset_type === "document";
   if (activeDocument) {
-    if (governanceSignal(q) && !/(方案|文档|资料|文件|预算|流程|人员配置|活动|其中|里面|上述|本方案|该方案)/.test(q)) {
-      return { mode: "governance_query", confidence: 0.9, reason: "当前锁定文档，但问题明确指向村级治理数据", source: "rule" };
+    if (governanceSignal(q) && explicitWorkIntent(q) && !/(方案|文档|资料|文件|预算|流程|人员配置|活动|其中|里面|上述|本方案|该方案)/.test(q)) {
+      return { mode: "governance_query", confidence: 0.9, reason: "当前锁定文档，但问题明确转向村级治理数据", source: "rule" };
     }
     return { mode: "document_query", confidence: 0.92, reason: "当前已锁定文档，上下文优先", source: "rule" };
   }
 
-  if (backendRoutable(q, referenceContext)) {
-    return { mode: "governance_query", confidence: 0.92, reason: "命中受支持治理查询信号", source: "rule" };
+  const nameQuery = /(?:查|看|查询|看看|关于)?\s*([\u4e00-\u9fa5]{2,4})(?:的|过去|历年|养老|缴费|情况)/.test(q);
+  if ((governanceSignal(q) && explicitWorkIntent(q)) || nameQuery) {
+    return { mode: "governance_query", confidence: 0.92, reason: "命中明确治理查询意图", source: "rule" };
   }
   return null;
 }
@@ -101,7 +106,7 @@ async function modelDecision(q: string, referenceContext: any): Promise<IntentDe
     const { content } = await gatewayJson([
       {
         role: "system",
-        content: `你是黄林坑村治理AI的意图路由器。只做分类，不回答问题。\n\n允许的 mode：\n- chat：问候、感谢、寒暄、情绪表达、闲聊、笑话、与AI聊天。\n- system_help：询问这个系统怎么用、如何上传/删除/发布/导出/查看依据等。\n- governance_query：明确要求查询、统计、筛选、比较、解释黄林坑村治理数据或政策。\n- document_query：当前有参考文档上下文，并且问题是在继续问该文档内容。\n- clarify：意图不清，贸然查询数据库可能给出错误结果。\n\n硬规则：\n1. “来聊天”“谢谢”“辛苦了”“哈哈”“你是谁”“今天有点累”等必须是 chat，即使上一轮在工作。\n2. 不能因为出现“村里”两个字就认定是治理查询，例如“村里最近挺热闹啊”更接近 chat。\n3. 无法确定时选择 clarify，绝不能默认人口查询。\n4. 如果没有明确治理查询意图，不允许选择 governance_query。\n5. 输出严格 JSON：{"mode":"...","confidence":0-1,"domain":"可选","reason":"一句话"}`,
+        content: `你是黄林坑村治理AI的意图路由器。只做分类，不回答问题。\n\n允许的 mode：\n- chat：问候、感谢、寒暄、情绪表达、闲聊、笑话、与AI聊天；只是谈到养老、台风、村里等话题但没有明确要查数据，也可以是 chat。\n- system_help：询问这个系统怎么用、如何上传/删除/发布/导出/查看依据等。\n- governance_query：明确要求查询、统计、筛选、比较、解释黄林坑村治理数据或政策。\n- document_query：当前有参考文档上下文，并且问题是在继续问该文档内容。\n- clarify：意图不清，贸然查询数据库可能给出错误结果。\n\n硬规则：\n1. “来聊天”“谢谢”“辛苦了”“哈哈”“你是谁”“今天有点累”等必须是 chat，即使上一轮在工作。\n2. 不能因为出现“村里”两个字就认定是治理查询，例如“村里最近挺热闹啊”是 chat。\n3. “养老保险真麻烦”“台风天挺吓人的”只是表达感受时是 chat，不应查数据库。\n4. 无法确定时选择 clarify，绝不能默认人口查询。\n5. 如果没有明确治理查询意图，不允许选择 governance_query。\n6. 输出严格 JSON：{"mode":"...","confidence":0-1,"domain":"可选","reason":"一句话"}`,
       },
       {
         role: "user",
@@ -177,6 +182,7 @@ async function handleApi(req: Request, context: Context, pathname: string) {
 
   let decision = ruleDecision(q, referenceContext, pathname);
   if (!decision) decision = await modelDecision(q, referenceContext);
+  if (decision.source === "model" && decision.confidence < 0.68) decision = { ...decision, mode: "clarify", reason: "模型判断置信度不足，避免误查数据库" };
 
   if (decision.mode === "chat") return chatResponse(q, decision);
   if (decision.mode === "system_help") return helpResponse(q, decision);
