@@ -24,4 +24,4 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-# V0.5.3.3 fixed source package trigger
+# V0.5.3.3 verified-avatar source package trigger
