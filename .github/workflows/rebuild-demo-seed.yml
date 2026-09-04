@@ -1,0 +1,166 @@
+name: Rebuild V0.5.0 demo seed SQL
+
+on:
+  push:
+    paths:
+      - '.github/workflows/rebuild-demo-seed.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate clean seed migration from public snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, datetime, re
+          root=pathlib.Path('data/demo-snapshot-v050')
+          out=pathlib.Path('netlify/database/migrations/002_seed-demo/migration.sql')
+          def load(name): return json.loads((root/f'{name}.json').read_text(encoding='utf-8'))['rows']
+          people=load('sys-people'); households=load('sys-households'); pension=load('sys-pension'); welfare=load('sys-welfare'); evac=load('sys-evacuations'); expenses=load('sys-expenses'); policies=load('sys-policies')
+          def q(v):
+              if v is None: return 'NULL'
+              if isinstance(v,bool): return 'TRUE' if v else 'FALSE'
+              if isinstance(v,(int,float)): return str(v)
+              s=str(v).replace("'","''")
+              return "'"+s+"'"
+          def date(v):
+              if not v: return 'NULL'
+              return q(str(v)[:10])
+          def ts(v):
+              if not v: return 'NULL'
+              return q(str(v).replace('T',' ').replace('.000Z','').replace('Z',''))
+          by_person={(r['姓名'],r['村组']):r for r in people}
+          sql=[]
+          sql.append("-- V0.5.0 clean demo seed rebuilt from data/demo-snapshot-v050.\n-- All records are fictional and for product testing only.\n")
+          sql.append("INSERT INTO households (household_id,village_group,address,house_structure,risk_level,geo_risk,notes) VALUES")
+          vals=[]
+          for r in households:
+              vals.append(f"({q(r.get('家庭ID'))},{q(r.get('村组'))},{q(r.get('家庭地址'))},{q(r.get('房屋结构'))},{q(r.get('风险等级'))},{q(r.get('地理风险'))},{q(r.get('备注'))})")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (household_id) DO UPDATE SET village_group=EXCLUDED.village_group,address=EXCLUDED.address,house_structure=EXCLUDED.house_structure,risk_level=EXCLUDED.risk_level,geo_risk=EXCLUDED.geo_risk,notes=EXCLUDED.notes;\n")
+
+          sql.append("INSERT INTO people (person_id,name,gender,birth_date,household_id,masked_phone,special_tags,risk_tags,notes) VALUES")
+          vals=[]
+          for r in people:
+              vals.append(f"({q(r.get('人员ID'))},{q(r.get('姓名'))},{q(r.get('性别'))},{date(r.get('出生日期'))},{q(r.get('家庭ID'))},NULL,{q(r.get('特殊标签'))},{q(r.get('风险标签'))},NULL)")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (person_id) DO UPDATE SET name=EXCLUDED.name,gender=EXCLUDED.gender,birth_date=EXCLUDED.birth_date,household_id=EXCLUDED.household_id,special_tags=EXCLUDED.special_tags,risk_tags=EXCLUDED.risk_tags;\n")
+
+          # household membership, one current row per person
+          sql.append("INSERT INTO household_members (household_id,person_id,relation,valid_from,valid_to,status) VALUES")
+          vals=[f"({q(r.get('家庭ID'))},{q(r.get('人员ID'))},'成员','2024-01-01',NULL,'有效')" for r in people if r.get('家庭ID')]
+          sql.append(',\n'.join(vals)+"\nON CONFLICT DO NOTHING;\n")
+
+          # pension accounts inferred from the public payment ledger; current public snapshot is canonical for payment rows.
+          pension_people=[]
+          seen=set()
+          for r in pension:
+              p=by_person.get((r.get('姓名'),r.get('村组')))
+              if not p: continue
+              pid=p['人员ID']
+              if pid not in seen:
+                  seen.add(pid); pension_people.append(p)
+          if pension_people:
+              sql.append("INSERT INTO pension_accounts (pension_account_id,person_id,insurance_type,enrollment_status,enrollment_date,benefit_status,updated_at,source_doc_id) VALUES")
+              vals=[]
+              for p in pension_people:
+                  age=int(p.get('年龄') or 0)
+                  benefit='领取中' if age>=60 else '未领取'
+                  vals.append(f"({q('PA-'+p['人员ID'])},{q(p['人员ID'])},'城乡居民基本养老保险','参保','2024-01-01',{q(benefit)},'2026-09-04','demo-snapshot-v050')")
+              sql.append(',\n'.join(vals)+"\nON CONFLICT (pension_account_id) DO UPDATE SET enrollment_status=EXCLUDED.enrollment_status,benefit_status=EXCLUDED.benefit_status,updated_at=EXCLUDED.updated_at;\n")
+          sql.append("INSERT INTO pension_payments (payment_id,person_id,year,payment_status,tier_amount,paid_amount,payment_date,subsidy_amount,source_doc_id) VALUES")
+          vals=[]
+          for i,r in enumerate(pension,1):
+              p=by_person.get((r.get('姓名'),r.get('村组')))
+              if not p: continue
+              vals.append(f"({q('PP%04d'%i)},{q(p['人员ID'])},{int(r.get('年度') or 0)},{q(r.get('缴费状态'))},{q(r.get('缴费档次'))}::numeric,{q(r.get('实缴金额'))}::numeric,{date(r.get('缴费日期'))},{q(r.get('补贴金额'))}::numeric,'demo-snapshot-v050')")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (payment_id) DO UPDATE SET payment_status=EXCLUDED.payment_status,tier_amount=EXCLUDED.tier_amount,paid_amount=EXCLUDED.paid_amount,payment_date=EXCLUDED.payment_date,subsidy_amount=EXCLUDED.subsidy_amount;\n")
+
+          sql.append("INSERT INTO welfare_records (welfare_id,person_id,welfare_type,status,start_date,end_date,notes,source_doc_id) VALUES")
+          vals=[]
+          for i,r in enumerate(welfare,1):
+              p=by_person.get((r.get('姓名'),r.get('村组')))
+              if not p: continue
+              vals.append(f"({q('WF%04d'%i)},{q(p['人员ID'])},{q(r.get('关爱事项'))},{q(r.get('状态'))},{date(r.get('开始日期'))},{date(r.get('结束日期'))},{q(r.get('备注'))},'demo-snapshot-v050')")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (welfare_id) DO UPDATE SET welfare_type=EXCLUDED.welfare_type,status=EXCLUDED.status,start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,notes=EXCLUDED.notes;\n")
+
+          # Events reconstructed from the public evacuation/expense ledgers.
+          event_names=[]
+          for r in evac+expenses:
+              n=r.get('事件')
+              if n and n not in event_names: event_names.append(n)
+          event_id={n:'EV%03d'%(i+1) for i,n in enumerate(event_names)}
+          if event_names:
+              sql.append("INSERT INTO events (event_id,event_type,event_name,start_time,end_time,response_level,status) VALUES")
+              vals=[]
+              for n in event_names:
+                  er=[r for r in evac if r.get('事件')==n]
+                  starts=[r.get('转移时间') for r in er if r.get('转移时间')]
+                  ends=[r.get('返回时间') for r in er if r.get('返回时间')]
+                  etype='台风' if '台风' in n else ('防汛' if '汛' in n else '应急')
+                  vals.append(f"({q(event_id[n])},{q(etype)},{q(n)},{ts(min(starts) if starts else None)},{ts(max(ends) if ends else None)},'村级响应','已结束')")
+              sql.append(',\n'.join(vals)+"\nON CONFLICT (event_id) DO UPDATE SET event_name=EXCLUDED.event_name,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,status=EXCLUDED.status;\n")
+          sql.append("INSERT INTO evacuations (evacuation_id,event_id,person_id,household_id,evacuation_time,shelter,reason,return_time,status,source_doc_id) VALUES")
+          vals=[]
+          for i,r in enumerate(evac,1):
+              p=by_person.get((r.get('姓名'),r.get('村组')))
+              if not p or not r.get('事件'): continue
+              vals.append(f"({q('EA%04d'%i)},{q(event_id[r['事件']])},{q(p['人员ID'])},{q(p.get('家庭ID'))},{ts(r.get('转移时间'))},{q(r.get('安置地点'))},{q(r.get('转移原因'))},{ts(r.get('返回时间'))},{q(r.get('状态'))},'demo-snapshot-v050')")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (evacuation_id) DO UPDATE SET evacuation_time=EXCLUDED.evacuation_time,shelter=EXCLUDED.shelter,reason=EXCLUDED.reason,return_time=EXCLUDED.return_time,status=EXCLUDED.status;\n")
+
+          sql.append("INSERT INTO expenses (expense_id,event_id,category,summary,expense_date,amount,handler_cadre_id,source_doc_id,verification_status) VALUES")
+          vals=[]
+          for i,r in enumerate(expenses,1):
+              if not r.get('事件'): continue
+              vals.append(f"({q('EX%04d'%i)},{q(event_id[r['事件']])},{q(r.get('费用类别'))},{q(r.get('摘要'))},{date(r.get('日期'))},{q(r.get('金额'))}::numeric,NULL,'demo-snapshot-v050',{q(r.get('核验状态'))})")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (expense_id) DO UPDATE SET category=EXCLUDED.category,summary=EXCLUDED.summary,expense_date=EXCLUDED.expense_date,amount=EXCLUDED.amount,verification_status=EXCLUDED.verification_status;\n")
+
+          sql.append("INSERT INTO policies (policy_id,domain,title,published_date,effective_date,status,source,doc_id,applicable_to,summary,clauses) VALUES")
+          vals=[]
+          for i,r in enumerate(policies,1):
+              clauses=r.get('关键条款')
+              if isinstance(clauses,str):
+                  try: clauses=json.loads(clauses)
+                  except: clauses=[clauses]
+              if clauses is None: clauses=[]
+              vals.append(f"({q('POL%03d'%i)},{q(r.get('政策领域'))},{q(r.get('标题'))},{date(r.get('发布日期'))},{date(r.get('生效日期'))},{q(r.get('状态'))},'Demo政策文件库',NULL,{q(r.get('适用对象'))},{q(r.get('摘要'))},{q(json.dumps(clauses,ensure_ascii=False))}::jsonb)")
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (policy_id) DO UPDATE SET domain=EXCLUDED.domain,title=EXCLUDED.title,published_date=EXCLUDED.published_date,effective_date=EXCLUDED.effective_date,status=EXCLUDED.status,applicable_to=EXCLUDED.applicable_to,summary=EXCLUDED.summary,clauses=EXCLUDED.clauses;\n")
+
+          catalog=[
+            ('people','人口与家庭','ready',['people','households'],['人口筛选','家庭风险','村组统计']),
+            ('pension','养老保险','ready',['pension_accounts','pension_payments'],['年度缴费','未缴人员','个人缴费历史']),
+            ('welfare','民政与关爱','ready',['welfare_records'],['低保','独居','高龄','行动不便']),
+            ('emergency','应急防灾','ready',['events','evacuations','expenses'],['转移人员','事件费用']),
+            ('policy','政策文件','ready',['policies'],['政策检索','条款摘要'])
+          ]
+          sql.append("INSERT INTO data_catalog(domain_id,domain_name,status,core_tables,answerable,updated_date) VALUES")
+          vals=[f"({q(i)},{q(n)},{q(s)},{q(json.dumps(t,ensure_ascii=False))}::jsonb,{q(json.dumps(a,ensure_ascii=False))}::jsonb,'2026-09-04')" for i,n,s,t,a in catalog]
+          sql.append(',\n'.join(vals)+"\nON CONFLICT (domain_id) DO UPDATE SET domain_name=EXCLUDED.domain_name,status=EXCLUDED.status,core_tables=EXCLUDED.core_tables,answerable=EXCLUDED.answerable,updated_date=EXCLUDED.updated_date;\n")
+
+          out.write_text('\n'.join(sql),encoding='utf-8')
+          print(f'wrote {out}: {out.stat().st_size} bytes')
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('netlify/database/migrations/002_seed-demo/migration.sql')
+          b=p.read_bytes(); b.decode('utf-8')
+          assert b'\x00' not in b
+          print('seed utf8 validation ok', len(b))
+          PY
+      - name: Commit repaired seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add netlify/database/migrations/002_seed-demo/migration.sql
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: rebuild clean V0.5.0 demo seed from public snapshot'
+          git push
