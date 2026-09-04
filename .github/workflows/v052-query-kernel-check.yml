@@ -1,0 +1,73 @@
+name: V0.5.2 structured query kernel check
+
+on:
+  push:
+    paths:
+      - 'netlify/functions/structured-query.mts'
+      - 'netlify/edge-functions/intent-router.ts'
+      - 'package.json'
+      - 'V052_CHANGELOG.md'
+      - 'V052_QUERY_REGRESSION.md'
+      - '.github/workflows/v052-query-kernel-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Bundle V0.5.2 serverless query kernel
+        run: npx --yes esbuild netlify/functions/structured-query.mts --bundle --platform=node --format=esm --outfile=/tmp/structured-query.mjs --external:@netlify/functions --external:@netlify/database
+      - name: Bundle V0.5.2 intent edge function
+        run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
+      - name: Static architecture and field coverage assertions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('netlify/functions/structured-query.mts').read_text(encoding='utf-8')
+          e=Path('netlify/edge-functions/intent-router.ts').read_text(encoding='utf-8')
+          required_datasets=['people','households','household_members','pension','pension_accounts','welfare','evacuations','events','cadres','event_cadres','expenses','policies']
+          for d in required_datasets:
+              assert f'id: "{d}"' in s, d
+          required_fields=['person_id','name','gender','birth_date','age','village_group','household_id','address','special_tags','risk_tags','year','payment_status','tier_amount','paid_amount','payment_date','subsidy_amount','insurance_type','enrollment_status','benefit_status','welfare_type','start_date','end_date','event_type','age_at_event','evacuation_time','shelter','reason','return_time','amount','verification_status','domain','published_date','effective_date','applicable_to','clauses','relation','risk_level','geo_risk','role','task_role','responsibility_area','confirmation_status']
+          for f in required_fields:
+              assert f'{f}:' in s or f'"{f}"' in s, f
+          required_ops=['eq','neq','gt','gte','lt','lte','between','in','contains','not_contains','is_null','not_null']
+          for op in required_ops:
+              assert op in s, op
+          assert 'Constraint Completeness' in s
+          assert 'parameterized-sql' in s
+          assert 'structured_query_kernel' in s
+          assert '不写SQL' in s
+          assert '禁止静默丢条件' in s
+          assert 'queryFilters(' not in s
+          assert '/api/query-v052-exec' in e
+          assert 'queryspec-v052' in e
+          print('V0.5.2 static architecture assertions passed')
+          PY
+      - name: Demo-data combination sanity checks
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          def rows(name):
+              data=json.loads(Path(f'data/demo-snapshot-v050/{name}.json').read_text(encoding='utf-8'))
+              return data.get('rows', data if isinstance(data,list) else [])
+          p=rows('sys-people')
+          assert len(p)==160
+          older=[r for r in p if int(r.get('年龄') or 0)>=70]
+          assert older, '70岁以上不应为0'
+          women=[r for r in older if r.get('性别')=='女']
+          g2=[r for r in women if r.get('村组')=='2组']
+          assert len(g2)<=len(women)<=len(older)<=len(p)
+          # 这些组合必须能被真实字段表达，不能靠姓名正则猜测。
+          assert all('姓名' in r and '年龄' in r and '性别' in r and '村组' in r for r in p[:20])
+          print('demo combination sanity:', {'70+':len(older),'70+女性':len(women),'2组70+女性':len(g2)})
+          PY
