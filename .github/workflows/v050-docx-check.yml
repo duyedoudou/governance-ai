@@ -1,12 +1,14 @@
-name: V0.5.0 DOCX parser check
+name: V0.5.0 repository check
 
 on:
   push:
     paths:
-      - 'netlify/functions/docx.mts'
-      - 'site/docx-integration.js'
-      - 'site/index.html'
+      - 'netlify/functions/**'
+      - 'netlify/database/migrations/**'
+      - 'site/**'
+      - 'data/demo-snapshot-v050/**'
       - 'package.json'
+      - 'netlify.toml'
       - '.github/workflows/v050-docx-check.yml'
 
 permissions:
@@ -21,10 +23,34 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - name: Check browser integration syntax
-        run: node --check site/docx-integration.js
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check site/app.js
+          node --check site/docx-integration.js
+      - name: Bundle main API function
+        run: npx --yes esbuild netlify/functions/api.mts --bundle --platform=node --format=esm --outfile=/tmp/api.mjs --external:@netlify/functions --external:@netlify/database --external:@netlify/blobs
       - name: Bundle DOCX function
         run: npx --yes esbuild netlify/functions/docx.mts --bundle --platform=node --format=esm --outfile=/tmp/docx.mjs --external:@netlify/functions --external:@netlify/database --external:@netlify/blobs
+      - name: Validate migrations and complete demo snapshot
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          for p in pathlib.Path('netlify/database/migrations').glob('*/migration.sql'):
+              b=p.read_bytes()
+              b.decode('utf-8')
+              assert b'\x00' not in b, p
+              print('migration utf8 ok:',p,len(b))
+          root=pathlib.Path('data/demo-snapshot-v050')
+          manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+          for asset_id,meta in manifest['datasets'].items():
+              d=json.loads((root/f'{asset_id}.json').read_text(encoding='utf-8'))
+              rows=d.get('rows') or []
+              total=int(d.get('total') or 0)
+              assert d.get('snapshot_complete') is True, asset_id
+              assert len(rows)==total==int(meta['rows']), (asset_id,len(rows),total,meta['rows'])
+              print('snapshot complete:',asset_id,total)
+          PY
       - name: Verify Mammoth can extract a minimal DOCX
         shell: bash
         run: |
