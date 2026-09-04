@@ -1,284 +1,471 @@
-
 import type { Context, Config } from "@netlify/functions";
 import { getDatabase } from "@netlify/database";
-import { getStore, getDeployStore } from "@netlify/blobs";
+import { getDeployStore, getStore } from "@netlify/blobs";
 import * as XLSX from "xlsx";
-
-type PlanStep = { tool: string; params?: Record<string, any> };
-type QueryPlan = { intent: string; domains: string[]; steps: PlanStep[]; detail?: boolean; note?: string };
 
 const AS_OF = "2026-09-04";
 const MODEL_DEFAULT = "gpt-4.1-mini";
-const ALLOWED_TOOLS = new Set(["person_filter","pension_stats","person_pension_history","emergency_event","policy_search","reference_dataset_query","data_gap"]);
+const SOURCE_STORE = "governance-source";
 
-const SYSTEM_REFERENCE_ALIASES: Record<string,string[]> = {
-  "sys-people":["人口基础台账","人口台账","村民基础名册","村民名册","人口基础信息"],
-  "sys-households":["家庭户台账","家庭台账","家庭户","户籍家庭台账","家庭信息台账"],
-  "sys-pension":["养老保险缴费台账","养老保险台账","养老缴费台账","城乡居民养老保险业务台账","养老保险业务台账"],
-  "sys-welfare":["民政与关爱台账","民政台账","关爱台账","低保台账","民政与关爱业务台账"],
-  "sys-evacuations":["应急转移安置台账","应急转移台账","转移安置台账","台风转移台账","人员转移安置台账"],
-  "sys-expenses":["应急费用台账","费用台账","防台费用台账","应急支出台账","应急费用"],
-  "sys-policies":["政策文件库","政策库","政策资料库"]
+const BUILTIN_ASSETS: Record<string, any> = {
+  "sys-people": {
+    asset_id: "sys-people", title: "人口基础台账", category: "人口与家庭", asset_type: "structured",
+    source: "黄林坑村人口基础台账（Demo）", description: "黄林坑村在册村民基础名册",
+    fields: ["人员ID","姓名","性别","出生日期","年龄","村组","家庭ID","家庭地址","特殊标签","风险标签"], system: true,
+  },
+  "sys-households": {
+    asset_id: "sys-households", title: "家庭户台账", category: "人口与家庭", asset_type: "structured",
+    source: "黄林坑村家庭户台账（Demo）", description: "家庭户、房屋结构与风险信息",
+    fields: ["家庭ID","村组","家庭地址","房屋结构","风险等级","地理风险","备注"], system: true,
+  },
+  "sys-pension": {
+    asset_id: "sys-pension", title: "养老保险缴费台账", category: "养老保险", asset_type: "structured",
+    source: "城乡居民养老保险业务台账（Demo）", description: "2024—2026年度养老保险缴费明细",
+    fields: ["姓名","村组","年度","缴费状态","缴费档次","实缴金额","缴费日期","补贴金额"], system: true,
+  },
+  "sys-welfare": {
+    asset_id: "sys-welfare", title: "民政与关爱台账", category: "民政与关爱", asset_type: "structured",
+    source: "民政与关爱业务台账（Demo）", description: "低保、独居、高龄、行动不便与临时救助记录",
+    fields: ["姓名","村组","关爱事项","状态","开始日期","结束日期","备注"], system: true,
+  },
+  "sys-evacuations": {
+    asset_id: "sys-evacuations", title: "应急转移安置台账", category: "应急防灾", asset_type: "structured",
+    source: "应急转移安置台账（Demo）", description: "防汛防台等事件中的人员转移安置记录",
+    fields: ["事件","姓名","村组","转移时间","安置地点","转移原因","返回时间","状态"], system: true,
+  },
+  "sys-expenses": {
+    asset_id: "sys-expenses", title: "应急费用台账", category: "应急防灾", asset_type: "structured",
+    source: "应急费用台账（Demo）", description: "应急事件已登记费用记录",
+    fields: ["事件","费用类别","摘要","日期","金额","核验状态"], system: true,
+  },
+  "sys-policies": {
+    asset_id: "sys-policies", title: "政策文件库", category: "政策文件", asset_type: "structured",
+    source: "政策文件库（Demo）", description: "养老、民政、应急等演示政策文件",
+    fields: ["政策领域","标题","发布日期","生效日期","状态","适用对象","摘要","关键条款"], system: true,
+  },
 };
 
-const SYSTEM_FIELD_ALIASES: Record<string,Record<string,string>> = {
-  "sys-people":{person_id:"人员ID",name:"姓名",gender:"性别",birth_date:"出生日期",age:"年龄",village_group:"村组",household_id:"家庭ID",address:"家庭地址",special_tags:"特殊标签",risk_tags:"风险标签"},
-  "sys-households":{household_id:"家庭ID",village_group:"村组",address:"家庭地址",house_structure:"房屋结构",risk_level:"风险等级",geo_risk:"地理风险",notes:"备注"},
-  "sys-pension":{name:"姓名",person_name:"姓名",village_group:"村组",year:"年度",payment_status:"缴费状态",tier_amount:"缴费档次",paid_amount:"实缴金额",payment_date:"缴费日期",subsidy_amount:"补贴金额"},
-  "sys-welfare":{name:"姓名",person_name:"姓名",village_group:"村组",welfare_type:"关爱事项",status:"状态",start_date:"开始日期",end_date:"结束日期",notes:"备注"},
-  "sys-evacuations":{event:"事件",event_name:"事件",name:"姓名",person_name:"姓名",village_group:"村组",evacuation_time:"转移时间",shelter:"安置地点",reason:"转移原因",return_time:"返回时间",status:"状态"},
-  "sys-expenses":{event:"事件",event_name:"事件",category:"费用类别",summary:"摘要",expense_date:"日期",date:"日期",amount:"金额",verification_status:"核验状态"},
-  "sys-policies":{domain:"政策领域",title:"标题",published_date:"发布日期",effective_date:"生效日期",status:"状态",applicable_to:"适用对象",summary:"摘要",clauses:"关键条款"}
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  "人口与家庭": "人口、家庭与村组基础资料",
+  "养老保险": "养老保险账户、缴费与待遇资料",
+  "民政与关爱": "低保、独居、高龄、残疾与救助资料",
+  "应急防灾": "防汛防台、人员转移、费用与干部参与资料",
+  "政策文件": "政策、通知、办法与业务依据",
 };
 
-const BUILTIN_REFERENCE_GUIDE = `
-系统内置参考资料（这些 asset_id 固定有效，用户在“参考数据”中看到的资料对应如下）：
-- sys-people：人口基础台账；字段：人员ID、姓名、性别、出生日期、年龄、村组、家庭ID、家庭地址、特殊标签、风险标签。
-- sys-households：家庭户台账；字段：家庭ID、村组、家庭地址、房屋结构、风险等级、地理风险、备注。
-- sys-pension：养老保险缴费台账；字段：姓名、村组、年度、缴费状态、缴费档次、实缴金额、缴费日期、补贴金额。
-- sys-welfare：民政与关爱台账；字段：姓名、村组、关爱事项、状态、开始日期、结束日期、备注。
-- sys-evacuations：应急转移安置台账；字段：事件、姓名、村组、转移时间、安置地点、转移原因、返回时间、状态。
-- sys-expenses：应急费用台账；字段：事件、费用类别、摘要、日期、金额、核验状态。
-- sys-policies：政策文件库；字段：政策领域、标题、发布日期、生效日期、状态、适用对象、摘要、关键条款。
-当用户明确引用这些资料时，reference_dataset_query 的 asset_id 必须使用上面的 sys-*，绝不能把中文标题直接当 asset_id。能用 person_filter / pension_stats / emergency_event / policy_search 更准确回答时，优先使用专用工具。
-`;
-
-function normalizeAssetRef(v:any){
-  return String(v??"").trim().replace(/^[“”"'\s]+|[“”"'\s]+$/g,"").replace(/^(参考数据|参考资料)[:：]?/,'').trim();
-}
-function resolveSystemAssetId(ref:any): string | null {
-  const x=normalizeAssetRef(ref); if(!x) return null;
-  if(SYSTEM_REFERENCE_ALIASES[x]) return x;
-  for(const [id,aliases] of Object.entries(SYSTEM_REFERENCE_ALIASES)){ if(aliases.includes(x)) return id; }
-  const fuzzy=Object.entries(SYSTEM_REFERENCE_ALIASES).filter(([,aliases])=>aliases.some(a=>a.includes(x)||x.includes(a)));
-  return fuzzy.length===1?fuzzy[0][0]:null;
-}
-function extractReferencedAssetLabel(q:string){
-  const m=q.match(/(?:基于|根据|从|用)?\s*(?:参考数据|参考资料)?\s*[“"']([^”"']+)[”"']/);
-  return m?.[1]?normalizeAssetRef(m[1]):"";
-}
-function canonicalSystemField(assetId:string, field:any){
-  const f=String(field??"").trim(); if(!f) return f; return SYSTEM_FIELD_ALIASES[assetId]?.[f] || f;
-}
-function extractPersonNameFromQuery(q:string){
-  const patterns=[/(?:查|看看|查询)?\s*([\u4e00-\u9fa5]{2,4}?)(?:的)(?:养老|缴费|参保|待遇|档案)/, /([\u4e00-\u9fa5]{2,4}?)(?:过去|历年|近几年)(?:的)?(?:养老|缴费|参保)/];
-  for(const re of patterns){const m=q.match(re);if(m?.[1] && !/养老|保险|缴费|待遇|历史|过去/.test(m[1])) return m[1];}
-  return undefined;
+function sourceStore() {
+  if (Netlify.context?.deploy.context === "production") return getStore(SOURCE_STORE, { consistency: "strong" });
+  return getDeployStore(SOURCE_STORE);
 }
 
-const CATALOG_FOR_MODEL = `
-黄林坑村 V0.4.9 Demo 已接入数据域：
-1. 人口与家庭：姓名、性别、出生日期、村组、家庭地址、家庭风险、特殊标签。
-2. 养老保险：参保状态、待遇状态、2024-2026年度缴费状态/档次/金额。
-3. 民政与关爱：低保、独居老人、高龄老人、残疾/行动不便、临时救助等Demo事项。
-4. 应急防灾：台风事件、转移人员、安置、干部参与、已核验费用。
-5. 政策与文件：Demo养老、民政、防灾等虚构政策。
-未接入：医疗保险、项目工程、土地与资产、车辆等。
-`;
+function env(name: string) {
+  try { return Netlify.env.get(name); } catch { return undefined; }
+}
 
-const PLAN_SYSTEM = `你是黄林坑村治理智能助手的Query Planner。你只生成查询计划，不回答事实。
-事实必须由数据库工具计算，严禁自行创造人数、姓名、金额或政策条款。
-输出严格JSON对象，不要Markdown。可用工具：
-- person_filter: 跨人口/家庭/养老/民政筛人。params可用 min_age,max_age,gender,village_group,welfare_type,welfare_status,pension_year,pension_payment_status,pension_benefit_status,special_tag_contains,detail,group_by(village_group)。
-- pension_stats: 养老年度统计。params: year,payment_status,group_by(village_group),detail。
-- person_pension_history: 某人养老历史。params: person_name。
-- emergency_event: 应急事件查询。params: event_ref(latest_typhoon或event_id/事件关键词),min_age,max_age,detail,include_households,include_expenses,include_cadres。
-- policy_search: 政策检索。params: domain,keywords数组。
-- reference_dataset_query: 查询“参考数据”中的已发布资料，既包括系统内置 sys-* 数据集，也包括数据治理端上传并发布的额外资料。params: asset_id,filters数组({field,op,value}),group_by,aggregate({op,count|sum|avg|min|max,field}),detail,keywords数组。系统内置资料必须使用有效 sys-* asset_id；能用 person_filter / pension_stats / emergency_event / policy_search 更准确回答时优先专用工具。绝不能把中文资料标题直接当 asset_id。
-- data_gap: 数据未接入。params: missing_domain,suggested_fields数组。
-一个问题可以包含多个步骤。若问题能用person_filter一次跨域完成，优先一次完成。
-“上一次台风”使用 event_ref=latest_typhoon。“转移人数”默认按person_id去重。
-历史事件年龄按事件开始日期计算。
-如果用户问的事实数据域未接入，必须用data_gap，不能猜。
-返回格式：{"intent":"data|policy|mixed|gap","domains":[...],"steps":[{"tool":"...","params":{...}}],"detail":true|false,"note":"简短计划说明"}`;
+function json(data: any, init: ResponseInit = {}) {
+  return Response.json(data, init);
+}
 
-function env(name: string) { try { return Netlify.env.get(name); } catch { return undefined; } }
+function cleanText(value: any) {
+  return String(value ?? "").trim();
+}
 
-async function callGateway(messages: any[], jsonMode=false) {
+function safeFilename(value: string) {
+  return String(value || "file").replace(/[\r\n"\\/]/g, "_");
+}
+
+function aiReady(asset: any) {
+  return asset?.asset_type === "structured" || cleanText(asset?.searchable_text).length > 0;
+}
+
+async function callGateway(messages: any[], jsonMode = false) {
   const apiKey = env("OPENAI_API_KEY");
   const baseUrl = env("OPENAI_BASE_URL");
   const model = env("HLK_MODEL") || MODEL_DEFAULT;
   if (!apiKey || !baseUrl) throw new Error("AI_GATEWAY_UNAVAILABLE");
-  const body:any = { model, messages };
+  const body: any = { model, messages };
   if (jsonMode) body.response_format = { type: "json_object" };
   const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`}, body:JSON.stringify(body)
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
   });
   if (!resp.ok) throw new Error(`AI_GATEWAY_${resp.status}`);
-  const data:any = await resp.json();
-  return { text: data.choices?.[0]?.message?.content || "", model };
+  const data: any = await resp.json();
+  return { text: cleanText(data.choices?.[0]?.message?.content), model };
 }
 
-function fallbackPlan(q:string): QueryPlan {
-  const year = +(q.match(/20(24|25|26)/)?.[0] || (/今年/.test(q)?"2026":/去年/.test(q)?"2025":"2026"));
-  const age = q.match(/(\d{1,3})\s*岁/); const minAge = age ? +age[1] : undefined;
-  if (/台风|转移|防汛|防台/.test(q)) return {intent:"data",domains:["应急防灾"],steps:[{tool:"emergency_event",params:{event_ref:/上一次|上次|最近|上回/.test(q)?"latest_typhoon":undefined,min_age:minAge,detail:/谁|哪些|名单|明细/.test(q),include_households:/家庭|家里/.test(q),include_expenses:/花了|费用|多少钱/.test(q),include_cadres:/干部|参与/.test(q),focus:/花了|费用|多少钱|支出|金额/.test(q)?"expenses":/干部|参与/.test(q)?"cadres":"people"}}]};
-  if (/政策|规定|条款|依据|怎么规定/.test(q)) return {intent:"policy",domains:["政策与文件"],steps:[{tool:"policy_search",params:{domain:/养老/.test(q)?"养老保险":/低保|救助|民政/.test(q)?"民政与关爱":/台风|防灾/.test(q)?"应急防灾":undefined,keywords:q.split(/[，。？！\s]+/).filter(Boolean).slice(0,8)}}]};
-  if (/养老|养老金|参保|缴费|待遇/.test(q)) {
-    const name = extractPersonNameFromQuery(q);
-    if (name && /历史|过去|缴费情况|档案/.test(q)) return {intent:"data",domains:["养老保险"],steps:[{tool:"person_pension_history",params:{person_name:name}}]};
-    if (/哪个组|各组|每组|缴费率|完成率/.test(q)) return {intent:"data",domains:["养老保险"],steps:[{tool:"pension_stats",params:{year,payment_status:/未缴|没缴/.test(q)?"未缴":undefined,group_by:/组/.test(q)?"village_group":undefined,detail:/谁|名单/.test(q)}}]};
-    return {intent:"data",domains:["人口与家庭","养老保险"],steps:[{tool:"person_filter",params:{min_age:minAge,pension_year:year,pension_payment_status:/未缴|没缴/.test(q)?"未缴":undefined,pension_benefit_status:/未领|没领/.test(q)?"not_receiving":undefined,detail:/谁|哪些|名单|明细/.test(q)}}]};
+function classifyAsset(name: string, fields: string[], text: string) {
+  const haystack = `${name} ${fields.join(" ")} ${text.slice(0, 4000)}`;
+  const rules = [
+    ["养老保险", /养老|缴费|参保|待遇|养老金/],
+    ["民政与关爱", /低保|民政|救助|独居|高龄|残疾|关爱/],
+    ["应急防灾", /台风|防汛|防灾|应急|转移|安置|避险|费用/],
+    ["政策文件", /政策|通知|办法|规定|条例|方案|实施意见/],
+    ["人口与家庭", /人口|村民|家庭|户籍|姓名|身份证|出生|住址/],
+  ] as const;
+  for (const [category, re] of rules) if (re.test(haystack)) return { category, confidence: 0.9, source: "规则分类" };
+  return { category: "其他资料", confidence: 0.55, source: "规则分类" };
+}
+
+function isStructuredFile(name: string, mime: string) {
+  return /\.(xlsx?|csv|json)$/i.test(name) || /spreadsheet|excel|csv|json/i.test(mime);
+}
+
+async function parseStructured(file: File) {
+  const name = file.name || "upload";
+  const ext = name.toLowerCase().split(".").pop();
+  if (ext === "json") {
+    const parsed = JSON.parse(await file.text());
+    const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.rows) ? parsed.rows : [parsed];
+    return { rows: rows.filter((x: any) => x && typeof x === "object" && !Array.isArray(x)), fields: rows[0] && typeof rows[0] === "object" ? Object.keys(rows[0]) : [] };
   }
-  if (/低保|独居|高龄|残疾|救助/.test(q)) return {intent:"data",domains:["人口与家庭","民政与关爱"],steps:[{tool:"person_filter",params:{min_age:minAge,welfare_type:/独居/.test(q)?"独居老人关爱":/低保/.test(q)?"最低生活保障":/残疾/.test(q)?"残疾/行动不便关爱":/高龄/.test(q)?"高龄老人关爱":"临时救助",detail:/谁|哪些|名单|明细/.test(q)}}]};
-  if (/人口|村民|多少人|岁|男性|女性|村组|几组/.test(q)) return {intent:"data",domains:["人口与家庭"],steps:[{tool:"person_filter",params:{min_age:minAge,gender:/女性|女的/.test(q)?"女":/男性|男的/.test(q)?"男":undefined,village_group:q.match(/([1-6])\s*组/)?.[1]?`${q.match(/([1-6])\s*组/)?.[1]}组`:undefined,detail:/谁|哪些|名单|明细/.test(q),group_by:/各组|各村组|每组/.test(q)?"village_group":undefined}}]};
-  return {intent:"gap",domains:[],steps:[{tool:"data_gap",params:{missing_domain:"未识别或未接入业务域",suggested_fields:["对象ID","业务状态","发生时间","来源文件"]}}]};
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
+  return { rows, fields: rows[0] ? Object.keys(rows[0]) : [] };
 }
 
-
-function preferredBuiltInStep(q:string, assetId:string, originalParams:any): PlanStep | null {
-  const ageMatch=q.match(/(\d{1,3})\s*岁/); const minAge=ageMatch?Number(ageMatch[1]):undefined;
-  const year=+(q.match(/20(24|25|26)/)?.[0] || (/今年/.test(q)?"2026":/去年/.test(q)?"2025":"2026"));
-  const detail=/谁|哪些人|哪些村民|姓名|名单|明细|具体人员|人员都有谁|都有谁|调出来|列出来|看一下/.test(q);
-  if(assetId==="sys-people") return {tool:"person_filter",params:{min_age:minAge,gender:/女性|女的/.test(q)?"女":/男性|男的/.test(q)?"男":undefined,village_group:q.match(/([1-6])\s*组/)?.[1]?`${q.match(/([1-6])\s*组/)?.[1]}组`:undefined,detail:detail||true,group_by:/各组|各村组|每组/.test(q)?"village_group":undefined}};
-  if(assetId==="sys-pension"){
-    const name=extractPersonNameFromQuery(q);
-    if(name && /历史|过去|历年|档案|缴费情况/.test(q)) return {tool:"person_pension_history",params:{person_name:name}};
-    if(/岁|年龄|独居|低保|高龄|残疾|救助/.test(q)) return {tool:"person_filter",params:{min_age:minAge,pension_year:year,pension_payment_status:/未缴|没缴/.test(q)?"未缴":/已缴/.test(q)?"已缴":undefined,pension_benefit_status:/未领|没领/.test(q)?"not_receiving":undefined,detail}};
-    if(/未缴|没缴|已缴|哪个组|各组|每组|缴费率|完成率|20(24|25|26)|今年|去年/.test(q)) return {tool:"pension_stats",params:{year,payment_status:/未缴|没缴/.test(q)?"未缴":/已缴/.test(q)?"已缴":undefined,group_by:/组/.test(q)?"village_group":undefined,detail}};
+async function ensureCategories(db: any) {
+  for (const [name, description] of Object.entries(CATEGORY_DESCRIPTIONS)) {
+    await db.pool.query(`INSERT INTO reference_categories(name,description) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET description=EXCLUDED.description`, [name, description]);
   }
-  if(assetId==="sys-welfare" && /低保|独居|高龄|残疾|救助/.test(q)) return {tool:"person_filter",params:{min_age:minAge,welfare_type:/独居/.test(q)?"独居老人关爱":/低保/.test(q)?"最低生活保障":/残疾/.test(q)?"残疾/行动不便关爱":/高龄/.test(q)?"高龄老人关爱":/救助/.test(q)?"临时救助":undefined,detail}};
-  if(assetId==="sys-evacuations" && /台风|防汛|防台|上一次|上次|最近|上回|年龄|岁|家庭|干部|参与/.test(q)) return {tool:"emergency_event",params:{event_ref:/上一次|上次|最近|上回/.test(q)?"latest_typhoon":undefined,min_age:minAge,detail,include_households:/家庭|家里/.test(q),include_expenses:/花了|费用|多少钱|金额/.test(q),include_cadres:/干部|参与/.test(q)}};
-  if(assetId==="sys-expenses" && /台风|上一次|上次|最近|上回/.test(q)) return {tool:"emergency_event",params:{event_ref:/上一次|上次|最近|上回/.test(q)?"latest_typhoon":undefined,detail:/明细|哪些费用|费用记录|列出来/.test(q),include_expenses:true,include_cadres:false,focus:"expenses"}};
-  if(assetId==="sys-policies" && /政策|规定|条款|依据|怎么规定|养老|低保|救助|民政|台风|防灾/.test(q)) return {tool:"policy_search",params:{domain:/养老/.test(q)?"养老保险":/低保|救助|民政/.test(q)?"民政与关爱":/台风|防灾|防汛/.test(q)?"应急防灾":undefined,keywords:q.split(/[，。？！\s]+/).filter(Boolean).slice(0,8)}};
-  return null;
 }
 
-function validatePlan(q:string, input:QueryPlan, referenceContext?:any): QueryPlan {
-  const plan:QueryPlan = JSON.parse(JSON.stringify(input || {intent:"gap",domains:[],steps:[]}));
-  const asksForDetail = /谁|哪些人|哪些村民|姓名|名单|明细|具体人员|人员都有谁|都有谁|人员情况|调出来|列出来|看一下/.test(q);
-  const asksHousehold = /家庭情况|家庭成员|家里情况|家庭信息/.test(q);
-  const asksExpense = /花了多少钱|费用|支出|花费|金额/.test(q);
-  const asksCadres = /哪些干部|谁参与|干部参与|参与干部/.test(q);
-  const labelFromQuery=extractReferencedAssetLabel(q);
-  const contextAssetId=normalizeAssetRef(referenceContext?.asset_id||"");
-  const contextTitle=normalizeAssetRef(referenceContext?.title||"");
-  const referencedSystemAsset=resolveSystemAssetId(contextAssetId)||resolveSystemAssetId(contextTitle)||resolveSystemAssetId(labelFromQuery);
-  if (asksForDetail) plan.detail = true;
-  plan.steps = (plan.steps || []).map(step => {
-    const params = {...(step.params || {})};
-    if (step.tool === "reference_dataset_query") {
-      if(contextAssetId) params.asset_id=contextAssetId;
-      const canonical=resolveSystemAssetId(params.asset_id)||referencedSystemAsset;
-      if(canonical) params.asset_id=canonical;
-      const preferred=canonical?preferredBuiltInStep(q,canonical,params):null;
-      if(preferred) return preferred;
+async function builtinRows(db: any, id: string, limit: number, offset: number) {
+  let sql = "";
+  if (id === "sys-people") sql = `SELECT p.person_id AS "人员ID",p.name AS "姓名",p.gender AS "性别",p.birth_date AS "出生日期",EXTRACT(YEAR FROM age($1::date,p.birth_date))::int AS "年龄",h.village_group AS "村组",h.household_id AS "家庭ID",h.address AS "家庭地址",p.special_tags AS "特殊标签",p.risk_tags AS "风险标签" FROM people p LEFT JOIN households h ON h.household_id=p.household_id ORDER BY h.village_group,p.person_id`;
+  else if (id === "sys-households") sql = `SELECT household_id AS "家庭ID",village_group AS "村组",address AS "家庭地址",house_structure AS "房屋结构",risk_level AS "风险等级",geo_risk AS "地理风险",notes AS "备注" FROM households ORDER BY village_group,household_id`;
+  else if (id === "sys-pension") sql = `SELECT p.name AS "姓名",h.village_group AS "村组",pp.year AS "年度",pp.payment_status AS "缴费状态",pp.tier_amount AS "缴费档次",pp.paid_amount AS "实缴金额",pp.payment_date AS "缴费日期",pp.subsidy_amount AS "补贴金额" FROM pension_payments pp JOIN people p ON p.person_id=pp.person_id LEFT JOIN households h ON h.household_id=p.household_id ORDER BY pp.year DESC,h.village_group,p.person_id`;
+  else if (id === "sys-welfare") sql = `SELECT p.name AS "姓名",h.village_group AS "村组",w.welfare_type AS "关爱事项",w.status AS "状态",w.start_date AS "开始日期",w.end_date AS "结束日期",w.notes AS "备注" FROM welfare_records w JOIN people p ON p.person_id=w.person_id LEFT JOIN households h ON h.household_id=p.household_id ORDER BY h.village_group,p.person_id,w.start_date`;
+  else if (id === "sys-evacuations") sql = `SELECT ev.event_name AS "事件",p.name AS "姓名",h.village_group AS "村组",e.evacuation_time AS "转移时间",e.shelter AS "安置地点",e.reason AS "转移原因",e.return_time AS "返回时间",e.status AS "状态" FROM evacuations e JOIN events ev ON ev.event_id=e.event_id JOIN people p ON p.person_id=e.person_id LEFT JOIN households h ON h.household_id=p.household_id ORDER BY ev.start_time DESC,h.village_group,p.person_id`;
+  else if (id === "sys-expenses") sql = `SELECT ev.event_name AS "事件",x.category AS "费用类别",x.summary AS "摘要",x.expense_date AS "日期",x.amount AS "金额",x.verification_status AS "核验状态" FROM expenses x JOIN events ev ON ev.event_id=x.event_id ORDER BY ev.start_time DESC,x.expense_date,x.expense_id`;
+  else if (id === "sys-policies") sql = `SELECT domain AS "政策领域",title AS "标题",published_date AS "发布日期",effective_date AS "生效日期",status AS "状态",applicable_to AS "适用对象",summary AS "摘要",clauses AS "关键条款" FROM policies ORDER BY published_date DESC,title`;
+  else throw new Error("UNKNOWN_BUILTIN_ASSET");
+  const countSql = `SELECT COUNT(*)::int AS n FROM (${sql}) q`;
+  const baseParams = id === "sys-people" ? [AS_OF] : [];
+  const { rows: countRows } = await db.pool.query(countSql, baseParams);
+  const { rows } = await db.pool.query(`${sql} LIMIT $${baseParams.length + 1} OFFSET $${baseParams.length + 2}`, [...baseParams, limit, offset]);
+  return { rows, total: countRows[0]?.n || 0 };
+}
+
+async function referenceAsset(db: any, id: string, page: number, limit: number) {
+  if (BUILTIN_ASSETS[id]) {
+    const { rows, total } = await builtinRows(db, id, limit, (page - 1) * limit);
+    return { asset: { ...BUILTIN_ASSETS[id], record_count: total }, rows, total, page, limit };
+  }
+  const { rows: assets } = await db.pool.query(`SELECT a.*,COALESCE(c.name,a.proposed_category) AS category,d.canonical_title AS dataset_title FROM data_assets a LEFT JOIN reference_categories c ON c.category_id=a.category_id LEFT JOIN reference_datasets d ON d.dataset_id=a.dataset_id WHERE a.asset_id=$1 AND a.status='published' LIMIT 1`, [id]);
+  const a = assets[0];
+  if (!a) return null;
+  let rows: any[] = [];
+  let total = 0;
+  if (a.asset_type === "structured") {
+    const { rows: c } = await db.pool.query(`SELECT COUNT(*)::int AS n FROM data_asset_records WHERE asset_id=$1`, [id]);
+    total = c[0]?.n || 0;
+    const r = await db.pool.query(`SELECT data FROM data_asset_records WHERE asset_id=$1 ORDER BY row_no LIMIT $2 OFFSET $3`, [id, limit, (page - 1) * limit]);
+    rows = r.rows.map((x: any) => x.data);
+  }
+  return {
+    asset: {
+      asset_id: a.asset_id, dataset_id: a.dataset_id, dataset_title: a.dataset_title || a.title, title: a.title,
+      category: a.category, asset_type: a.asset_type, source: a.source_file_name, description: a.description,
+      fields: a.fields || [], record_count: a.record_count, searchable_text: a.searchable_text || "", version_label: a.version_label,
+      system: false, ai_ready: aiReady(a),
+    }, rows, total, page, limit,
+  };
+}
+
+function queryFilters(query: string) {
+  const year = query.match(/20\d{2}/)?.[0];
+  const minAge = query.match(/(\d{2,3})\s*岁(?:以上|及以上|起)/)?.[1];
+  const group = query.match(/([1-9]\d*)组/)?.[1];
+  const name = query.match(/(?:查|看|查询|看看|关于)?\s*([\u4e00-\u9fa5]{2,4})(?:的|过去|历年|养老|缴费|情况)/)?.[1];
+  return { year: year ? Number(year) : undefined, minAge: minAge ? Number(minAge) : undefined, group: group ? `${group}组` : undefined, name };
+}
+
+async function runBuiltinQuery(db: any, query: string, context?: any) {
+  const q = query;
+  const f = queryFilters(q);
+  const contextId = cleanText(context?.asset_id);
+  if (contextId === "sys-pension" || /养老|缴费|参保|待遇/.test(q)) {
+    const params: any[] = [];
+    const where = ["1=1"];
+    if (f.year) { params.push(f.year); where.push(`pp.year=$${params.length}`); }
+    if (/未缴/.test(q)) where.push(`pp.payment_status='未缴'`);
+    if (/已缴/.test(q) && !/未缴/.test(q)) where.push(`pp.payment_status='已缴'`);
+    if (f.name) { params.push(f.name); where.push(`p.name=$${params.length}`); }
+    const { rows } = await db.pool.query(`SELECT p.name AS "姓名",h.village_group AS "村组",pp.year AS "年度",pp.payment_status AS "缴费状态",pp.tier_amount AS "缴费档次",pp.paid_amount AS "实缴金额",pp.payment_date AS "缴费日期",pp.subsidy_amount AS "补贴金额" FROM pension_payments pp JOIN people p ON p.person_id=pp.person_id LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY pp.year DESC,h.village_group,p.name`, params);
+    return { kind: "pension_stats", domain: "养老保险", title: "养老保险查询结果", summary: `查询到 ${rows.length} 条养老保险缴费记录。`, facts: [{ label: "记录数", value: `${rows.length} 条` }], rows: /谁|哪些|名单|明细|具体|记录|历史/.test(q) ? rows.slice(0, 200) : [], columns: BUILTIN_ASSETS["sys-pension"].fields, recordRows: rows, filters: [f.year ? `年度=${f.year}` : "全部年度"], evidence: ["养老保险缴费台账"], tools: [{ name: "pension_query", desc: "养老保险缴费表只读查询" }] };
+  }
+  if (contextId === "sys-welfare" || /低保|独居|高龄|关爱|救助|行动不便|民政/.test(q)) {
+    const params: any[] = [];
+    const where = ["1=1"];
+    const type = /低保/.test(q) ? "最低生活保障" : /独居/.test(q) ? "独居老人关爱" : /高龄/.test(q) ? "高龄老人关爱" : /行动不便|残疾/.test(q) ? "残疾/行动不便关爱" : /救助/.test(q) ? "临时救助" : undefined;
+    if (type) { params.push(type); where.push(`w.welfare_type=$${params.length}`); }
+    if (f.group) { params.push(f.group); where.push(`h.village_group=$${params.length}`); }
+    const { rows } = await db.pool.query(`SELECT p.name AS "姓名",h.village_group AS "村组",w.welfare_type AS "关爱事项",w.status AS "状态",w.start_date AS "开始日期",w.end_date AS "结束日期",w.notes AS "备注" FROM welfare_records w JOIN people p ON p.person_id=w.person_id LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY h.village_group,p.name`, params);
+    return { kind: "welfare_query", domain: "民政与关爱", title: "民政与关爱查询结果", summary: `查询到 ${rows.length} 条符合条件的关爱记录。`, facts: [{ label: "记录数", value: `${rows.length} 条` }], rows: /谁|哪些|名单|明细|具体/.test(q) ? rows : [], columns: BUILTIN_ASSETS["sys-welfare"].fields, recordRows: rows, filters: type ? [`关爱事项=${type}`] : [], evidence: ["民政与关爱台账"], tools: [{ name: "welfare_query", desc: "民政关爱台账只读查询" }] };
+  }
+  if (contextId === "sys-evacuations" || contextId === "sys-expenses" || /台风|防汛|转移|安置|应急|费用|花了|支出/.test(q)) {
+    const eventCond = /上一次|上次|最近|上一回/.test(q) ? `AND ev.event_id=(SELECT event_id FROM events WHERE event_type='台风' ORDER BY start_time DESC LIMIT 1)` : "";
+    if (/费用|花了|支出|金额/.test(q) || contextId === "sys-expenses") {
+      const { rows } = await db.pool.query(`SELECT ev.event_name AS "事件",x.category AS "费用类别",x.summary AS "摘要",x.expense_date AS "日期",x.amount AS "金额",x.verification_status AS "核验状态" FROM expenses x JOIN events ev ON ev.event_id=x.event_id WHERE 1=1 ${eventCond} ORDER BY ev.start_time DESC,x.expense_date`);
+      const verified = rows.filter((r: any) => r["核验状态"] === "已核验");
+      const total = verified.reduce((s: number, r: any) => s + Number(r["金额"] || 0), 0);
+      return { kind: "emergency_expenses", domain: "应急防灾", title: "应急费用查询结果", summary: `共查询到 ${rows.length} 条费用记录，已核验金额合计 ${total.toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元。`, facts: [{ label: "已核验金额", value: `${total.toLocaleString("zh-CN", { minimumFractionDigits: 2 })} 元` }, { label: "费用记录", value: `${rows.length} 条` }], rows: /明细|哪些|记录|列出/.test(q) ? rows : [], columns: BUILTIN_ASSETS["sys-expenses"].fields, recordRows: rows, filters: eventCond ? ["最近一次台风事件"] : [], evidence: ["应急费用台账"], tools: [{ name: "emergency_expense_query", desc: "应急费用台账只读查询" }] };
     }
-    if (asksForDetail && ["person_filter","pension_stats","emergency_event","reference_dataset_query"].includes(step.tool)) params.detail = true;
-    if (step.tool === "emergency_event") {
-      if (asksHousehold) params.include_households = true;
-      if (asksExpense) params.include_expenses = true;
-      if (asksCadres) params.include_cadres = true;
-      if (asksExpense && !asksForDetail && !asksCadres) params.focus = "expenses";
-      else if (asksCadres && !asksForDetail && !asksExpense) params.focus = "cadres";
-      else if (!params.focus) params.focus = "people";
-    }
-    return {...step, params};
-  });
-  if(referenceContext?.category) plan.domains=[...new Set([...(plan.domains||[]),String(referenceContext.category)])];
-  else if(referencedSystemAsset){
-    const domainMap:Record<string,string>={"sys-people":"人口与家庭","sys-households":"人口与家庭","sys-pension":"养老保险","sys-welfare":"民政与关爱","sys-evacuations":"应急防灾","sys-expenses":"应急防灾","sys-policies":"政策与文件"};
-    plan.domains=[...new Set([...(plan.domains||[]),domainMap[referencedSystemAsset]])];
+    const params: any[] = [];
+    const where = ["1=1"];
+    if (f.minAge) { params.push(f.minAge); where.push(`EXTRACT(YEAR FROM age(ev.start_time,p.birth_date))::int >= $${params.length}`); }
+    const { rows } = await db.pool.query(`SELECT ev.event_name AS "事件",p.name AS "姓名",EXTRACT(YEAR FROM age(ev.start_time,p.birth_date))::int AS "当时年龄",h.village_group AS "村组",h.address AS "家庭地址",e.evacuation_time AS "转移时间",e.shelter AS "安置地点",e.reason AS "转移原因",e.return_time AS "返回时间",e.status AS "状态" FROM evacuations e JOIN events ev ON ev.event_id=e.event_id JOIN people p ON p.person_id=e.person_id LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ${eventCond} ORDER BY ev.start_time DESC,h.village_group,p.name`, params);
+    return { kind: "emergency_event", domain: "应急防灾", title: "应急转移查询结果", summary: `查询到 ${rows.length} 条人员转移记录。`, facts: [{ label: "转移记录", value: `${rows.length} 条` }], rows: /谁|哪些|名单|明细|具体/.test(q) ? rows : [], columns: ["事件","姓名","当时年龄","村组","家庭地址","转移时间","安置地点","转移原因","返回时间","状态"], recordRows: rows, filters: [eventCond ? "最近一次台风事件" : "全部事件", f.minAge ? `当时年龄≥${f.minAge}` : ""].filter(Boolean), evidence: ["应急转移安置台账"], tools: [{ name: "emergency_query", desc: "应急转移台账只读查询" }] };
   }
-  return plan;
+  if (contextId === "sys-policies" || /政策|规定|条款|依据|办法/.test(q)) {
+    const tokens = q.split(/[，。！？、\s]+/).filter((x) => x.length >= 2).slice(0, 8);
+    const params: any[] = [];
+    const clauses: string[] = [];
+    for (const t of tokens) { params.push(`%${t}%`); clauses.push(`(title ILIKE $${params.length} OR summary ILIKE $${params.length} OR applicable_to ILIKE $${params.length})`); }
+    const { rows } = await db.pool.query(`SELECT domain AS "政策领域",title AS "标题",published_date AS "发布日期",effective_date AS "生效日期",status AS "状态",applicable_to AS "适用对象",summary AS "摘要",clauses AS "关键条款" FROM policies ${clauses.length ? `WHERE ${clauses.join(" OR ")}` : ""} ORDER BY published_date DESC`, params);
+    return { kind: "policy_search", domain: "政策文件", title: "政策检索结果", summary: `匹配到 ${rows.length} 份政策文件。`, facts: [{ label: "匹配文件", value: `${rows.length} 份` }], rows, columns: BUILTIN_ASSETS["sys-policies"].fields, recordRows: rows, filters: tokens.map((x) => `关键词=${x}`), evidence: ["政策文件库"], tools: [{ name: "policy_search", desc: "政策文件库只读检索" }] };
+  }
+  const params: any[] = [AS_OF];
+  const where = ["1=1"];
+  if (f.minAge) { params.push(f.minAge); where.push(`EXTRACT(YEAR FROM age($1::date,p.birth_date))::int >= $${params.length}`); }
+  if (f.group) { params.push(f.group); where.push(`h.village_group=$${params.length}`); }
+  if (f.name) { params.push(f.name); where.push(`p.name=$${params.length}`); }
+  const { rows } = await db.pool.query(`SELECT p.person_id AS "人员ID",p.name AS "姓名",p.gender AS "性别",p.birth_date AS "出生日期",EXTRACT(YEAR FROM age($1::date,p.birth_date))::int AS "年龄",h.village_group AS "村组",h.household_id AS "家庭ID",h.address AS "家庭地址",p.special_tags AS "特殊标签",p.risk_tags AS "风险标签" FROM people p LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY h.village_group,p.name`, params);
+  return { kind: "person_filter", domain: "人口与家庭", title: "人口与家庭查询结果", summary: `符合条件的人员共 ${rows.length} 人。`, facts: [{ label: "符合条件人数", value: `${rows.length} 人` }], rows: /谁|哪些|名单|明细|具体|姓名/.test(q) ? rows : [], columns: BUILTIN_ASSETS["sys-people"].fields, recordRows: rows, filters: [f.minAge ? `年龄≥${f.minAge}` : "", f.group ? `村组=${f.group}` : ""].filter(Boolean), evidence: ["人口基础台账"], tools: [{ name: "person_filter", desc: "人口与家庭台账只读查询" }] };
 }
 
-async function dynamicReferenceCatalog(db:any){
-  try{
-    const {rows}=await db.pool.query(`SELECT a.asset_id,a.dataset_id,a.title,a.asset_type,a.version_label,COALESCE(c.name,a.proposed_category) AS category,a.fields,a.record_count FROM data_assets a LEFT JOIN reference_categories c ON c.category_id=a.category_id WHERE a.status='published' AND COALESCE(a.is_current,true)=true AND (a.asset_type='structured' OR LENGTH(COALESCE(a.searchable_text,''))>0) ORDER BY a.published_at DESC NULLS LAST LIMIT 40`);
-    if(!rows.length) return "当前没有额外发布的数据治理资料。";
-    return "数据治理端额外上传并发布的参考资料（仅下列真实asset_id可被reference_dataset_query使用；不要用标题替代asset_id）：\n"+rows.map((r:any)=>`- asset_id=${r.asset_id}; dataset_id=${r.dataset_id||''}; 版本=${r.version_label||''}; 分类=${r.category||'未分类'}; 标题=${r.title}; 类型=${r.asset_type}; 记录=${r.record_count}; 字段=${JSON.stringify(r.fields||[])}`).join("\n");
-  }catch{return "当前没有额外发布的数据治理资料。";}
+async function uploadedStructuredQuery(db: any, assetId: string, query: string) {
+  const { rows: assets } = await db.pool.query(`SELECT a.*,COALESCE(c.name,a.proposed_category) AS category FROM data_assets a LEFT JOIN reference_categories c ON c.category_id=a.category_id WHERE a.asset_id=$1 AND a.status='published' LIMIT 1`, [assetId]);
+  const asset = assets[0];
+  if (!asset) throw new Error("REFERENCE_ASSET_NOT_FOUND");
+  if (asset.asset_type !== "structured") throw new Error("DOCUMENT_QUERY_REQUIRES_DOCUMENT_ROUTE");
+  const { rows: records } = await db.pool.query(`SELECT data FROM data_asset_records WHERE asset_id=$1 ORDER BY row_no`, [assetId]);
+  let rows = records.map((x: any) => x.data);
+  const tokens = query.match(/[A-Za-z0-9_.%-]{2,}|[\u4e00-\u9fa5]{2,}/g) || [];
+  const useful = tokens.filter((x) => !/基于|参考数据|资料|查询|看看|这个|这份|多少|哪些|什么|情况/.test(x)).slice(0, 12);
+  if (useful.length) {
+    const filtered = rows.filter((row: any) => {
+      const text = JSON.stringify(row).toLowerCase();
+      return useful.some((t) => text.includes(t.toLowerCase()));
+    });
+    if (filtered.length) rows = filtered;
+  }
+  return { kind: "reference_dataset_query", domain: asset.category || "参考数据", title: asset.title, summary: `在“${asset.title}”中查询到 ${rows.length} 条相关记录。`, facts: [{ label: "相关记录", value: `${rows.length} 条` }], rows: /明细|哪些|记录|列出|具体|谁/.test(query) ? rows.slice(0, 200) : [], columns: asset.fields || (rows[0] ? Object.keys(rows[0]) : []), recordRows: rows, filters: useful.map((x) => `关键词=${x}`), evidence: [asset.source_file_name], tools: [{ name: "reference_dataset_query", desc: `已发布结构化资料 · asset_id=${asset.asset_id}` }] };
 }
 
-async function makePlan(q:string, db:any, referenceContext?:any) {
+async function queryHandler(req: Request) {
+  const body: any = await req.json().catch(() => ({}));
+  const query = cleanText(body.query);
+  const referenceContext = body.reference_context && typeof body.reference_context === "object" ? body.reference_context : null;
+  if (!query) return json({ ok: false, error: "query_required", message: "请输入查询问题。" }, { status: 400 });
+  const db = getDatabase();
+  let result: any;
+  const contextId = cleanText(referenceContext?.asset_id);
   try {
-    const dynamicCatalog=await dynamicReferenceCatalog(db);
-    const contextGuide=referenceContext?.asset_id?`\n用户从“参考数据”界面明确选中了资料：asset_id=${referenceContext.asset_id}; dataset_id=${referenceContext.dataset_id||''}; 数据集=${referenceContext.dataset_title||''}; 版本=${referenceContext.version_label||''}; 标题=${referenceContext.title||''}; 分类=${referenceContext.category||''}。这是结构化上下文，优先级高于从自然语言猜资料ID；若使用reference_dataset_query必须沿用这个asset_id，并在连续追问中保持该资料上下文。`:"";
-    const {text,model} = await callGateway([{role:"system",content:PLAN_SYSTEM+"\n"+CATALOG_FOR_MODEL+"\n"+BUILTIN_REFERENCE_GUIDE+"\n"+dynamicCatalog+contextGuide},{role:"user",content:q}], true);
-    const parsed = JSON.parse(text);
-    const steps=(parsed.steps||[]).filter((s:any)=>ALLOWED_TOOLS.has(s.tool)).slice(0,6);
-    if (!steps.length) throw new Error("EMPTY_PLAN");
-    return {plan:validatePlan(q,{...parsed,steps} as QueryPlan,referenceContext), modelMode:"netlify-ai-gateway", modelName:model};
-  } catch (e) {
-    return {plan:validatePlan(q,fallbackPlan(q),referenceContext), modelMode:"rule-fallback", modelName:"none"};
+    if (contextId && !BUILTIN_ASSETS[contextId]) result = await uploadedStructuredQuery(db, contextId, query);
+    else result = await runBuiltinQuery(db, query, referenceContext);
+  } catch (e: any) {
+    result = { kind: "data_gap", domain: referenceContext?.category || "综合查询", title: "当前无法可靠回答", summary: e?.message === "REFERENCE_ASSET_NOT_FOUND" ? "当前参考资料未发布或已不存在。" : "当前数据不足以可靠回答这个问题。", facts: [], rows: [], columns: [], recordRows: [], gap: true, filters: [cleanText(e?.message || "DATA_GAP")], evidence: [], tools: [{ name: "data_gap", desc: "未找到可靠数据依据" }] };
   }
+  let narrative = result.summary;
+  let modelMode = "rule-engine";
+  let modelName = "none";
+  try {
+    const model = await callGateway([
+      { role: "system", content: "你是黄林坑村治理智能助手。只能依据后续给出的数据库查询结果回答，不得编造额外事实。用简洁中文总结；如果数据为空或标记 gap，明确说明无法可靠回答。" },
+      { role: "user", content: `用户问题：${query}\n数据库结果：${JSON.stringify({ summary: result.summary, facts: result.facts, rows: result.rows?.slice?.(0, 30), filters: result.filters, evidence: result.evidence }, null, 2)}` },
+    ]);
+    if (model.text) narrative = model.text;
+    modelMode = "netlify-ai-gateway";
+    modelName = model.model;
+  } catch {}
+  const plan = { intent: result.gap ? "gap" : "data", domains: [result.domain].filter(Boolean), steps: result.tools?.map((x: any) => ({ tool: x.name, params: contextId ? { asset_id: contextId } : {} })) || [], detail: !!result.rows?.length, note: "只读查询已发布数据" };
+  try { await db.pool.query(`INSERT INTO audit_logs(actor,original_query,model_mode,model_name,plan,result_summary) VALUES('demo-user',$1,$2,$3,$4::jsonb,$5)`, [query, modelMode, modelName, JSON.stringify(plan), result.summary]); } catch {}
+  return json({ ok: true, model: { mode: modelMode, name: modelName, gateway: modelMode === "netlify-ai-gateway" }, plan, result, narrative, generated_at: new Date().toISOString() });
 }
 
-function ageExpr(refParam:number){ return `EXTRACT(YEAR FROM age($${refParam}::date, p.birth_date))::int`; }
-
-async function toolPersonFilter(db:any, params:any) {
-  const values:any[]=[AS_OF]; let where=["1=1"]; let idx=2;
-  if (params.min_age!=null){ where.push(`${ageExpr(1)} >= $${idx}`); values.push(+params.min_age); idx++; }
-  if (params.max_age!=null){ where.push(`${ageExpr(1)} <= $${idx}`); values.push(+params.max_age); idx++; }
-  if (params.gender){ where.push(`p.gender = $${idx}`); values.push(params.gender); idx++; }
-  if (params.village_group){ where.push(`h.village_group = $${idx}`); values.push(params.village_group); idx++; }
-  if (params.special_tag_contains){ where.push(`COALESCE(p.special_tags,'') ILIKE $${idx}`); values.push(`%${params.special_tag_contains}%`); idx++; }
-  if (params.welfare_type){
-    where.push(`EXISTS (SELECT 1 FROM welfare_records w WHERE w.person_id=p.person_id AND w.welfare_type=$${idx}${params.welfare_status?` AND w.status=$${idx+1}`:""})`);
-    values.push(params.welfare_type); idx++; if(params.welfare_status){values.push(params.welfare_status);idx++;}
+async function statusHandler() {
+  const db = getDatabase();
+  const names = ["people","households","pension_payments","welfare_records","events","evacuations","expenses","policies"];
+  const counts: Record<string, number> = {};
+  for (const name of names) {
+    try { const { rows } = await db.pool.query(`SELECT COUNT(*)::int AS n FROM ${name}`); counts[name] = rows[0]?.n || 0; }
+    catch { counts[name] = 0; }
   }
-  if (params.pension_year){
-    let sub=`EXISTS (SELECT 1 FROM pension_payments pp WHERE pp.person_id=p.person_id AND pp.year=$${idx}`; values.push(+params.pension_year); idx++;
-    if(params.pension_payment_status){sub+=` AND pp.payment_status=$${idx}`;values.push(params.pension_payment_status);idx++;} sub+=`)`; where.push(sub);
-  }
-  if (params.pension_benefit_status){
-    if(params.pension_benefit_status==="not_receiving") where.push(`EXISTS (SELECT 1 FROM pension_accounts pa WHERE pa.person_id=p.person_id AND COALESCE(pa.benefit_status,'') <> '领取中')`);
-    else {where.push(`EXISTS (SELECT 1 FROM pension_accounts pa WHERE pa.person_id=p.person_id AND pa.benefit_status=$${idx})`);values.push(params.pension_benefit_status);idx++;}
-  }
-  const sql=`SELECT p.person_id,p.name AS 姓名,p.gender AS 性别,${ageExpr(1)} AS 年龄,h.village_group AS 村组,h.address AS 家庭地址,p.special_tags AS 特殊标签,p.risk_tags AS 风险标签 FROM people p LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY h.village_group,p.name`;
-  const {rows}=await db.pool.query(sql,values);
-  if(params.group_by==="village_group"){
-    const counts:any={}; for(const r of rows) counts[r.村组||"未知"]=(counts[r.村组||"未知"]||0)+1;
-    return {kind:"person_filter",title:"人员跨域筛选",summary:`符合条件的人员共 ${rows.length} 人。`,facts:[{label:"符合条件人数",value:`${rows.length} 人`}],rows:Object.entries(counts).map(([村组,人数])=>({村组,人数})),columns:["村组","人数"],recordRows:rows,filters:[`统计基准日 ${AS_OF}`]};
-  }
-  return {kind:"person_filter",title:"人员跨域筛选",summary:`符合条件的人员共 ${rows.length} 人。`,facts:[{label:"符合条件人数",value:`${rows.length} 人`}],rows:params.detail?rows:[],columns:["姓名","性别","年龄","村组","家庭地址","特殊标签","风险标签"],recordRows:rows,filters:[`统计基准日 ${AS_OF}`]};
+  return json({ ok: true, version: "0.5.0", as_of: AS_OF, counts, data_mode: "read-only published data" });
 }
 
-async function toolPensionStats(db:any, params:any){
-  const year=+(params.year||2026); const values:any[]=[year]; let where=["pp.year=$1"]; let idx=2;
-  if(params.payment_status){where.push(`pp.payment_status=$${idx}`);values.push(params.payment_status);idx++;}
-  const {rows}=await db.pool.query(`SELECT p.person_id,p.name AS 姓名,h.village_group AS 村组,pp.payment_status AS 缴费状态,pp.tier_amount AS 缴费档次,pp.paid_amount AS 实缴金额 FROM pension_payments pp JOIN people p ON p.person_id=pp.person_id LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY h.village_group,p.name`,values);
-  if(params.group_by==="village_group"){
-    const counts:any={}; for(const r of rows) counts[r.村组||"未知"]=(counts[r.村组||"未知"]||0)+1;
-    const grouped=Object.entries(counts).map(([村组,人数])=>({村组,人数})).sort((a:any,b:any)=>b.人数-a.人数);
-    return {kind:"pension_stats",title:`${year}年度养老保险统计`,summary:`${year}年度符合条件的缴费记录共 ${rows.length} 条。`,facts:[{label:"记录数",value:`${rows.length} 条`},{label:"最多村组",value:grouped[0]?`${grouped[0].村组} · ${grouped[0].人数} 人`:"—"}],rows:grouped,columns:["村组","人数"],recordRows:rows,filters:[`年度=${year}`]};
-  }
-  const paid=rows.filter((r:any)=>r.缴费状态==="已缴").length;
-  return {kind:"pension_stats",title:`${year}年度养老保险统计`,summary:`${year}年度查询到 ${rows.length} 条记录。`,facts:[{label:"记录数",value:`${rows.length} 条`},{label:"其中已缴",value:`${paid} 条`}],rows:params.detail?rows:[],columns:["姓名","村组","缴费状态","缴费档次","实缴金额"],recordRows:rows,filters:[`年度=${year}`]};
+async function auditHandler() {
+  const db = getDatabase();
+  const { rows } = await db.pool.query(`SELECT id,actor,original_query,model_mode,model_name,plan,result_summary,created_at FROM audit_logs ORDER BY id DESC LIMIT 100`);
+  return json({ ok: true, rows });
 }
 
-async function toolPensionHistory(db:any, params:any){
-  const name=String(params.person_name||"").trim();
-  const {rows:persons}=await db.pool.query(`SELECT p.person_id,p.name,h.village_group FROM people p LEFT JOIN households h ON h.household_id=p.household_id WHERE p.name=$1`,[name]);
-  if(!persons.length) return {kind:"person_pension_history",title:"养老档案",summary:`未查到姓名为“${name}”的人员。`,facts:[],rows:[],columns:[],recordRows:[],filters:["姓名精确匹配"]};
-  const p=persons[0]; const {rows}=await db.pool.query(`SELECT pp.year AS 年度,pp.payment_status AS 缴费状态,pp.tier_amount AS 缴费档次,pp.paid_amount AS 实缴金额,pp.payment_date AS 缴费日期,pp.subsidy_amount AS 补贴金额 FROM pension_payments pp WHERE pp.person_id=$1 ORDER BY pp.year`,[p.person_id]);
-  const {rows:acct}=await db.pool.query(`SELECT enrollment_status,benefit_status FROM pension_accounts WHERE person_id=$1 LIMIT 1`,[p.person_id]);
-  return {kind:"person_pension_history",title:`${name} · 养老保险档案`,summary:`已查询 ${name} 的Demo养老保险账户和历年缴费记录。`,facts:[{label:"参保状态",value:acct[0]?.enrollment_status||"—"},{label:"待遇状态",value:acct[0]?.benefit_status||"—"},{label:"缴费记录",value:`${rows.length} 年`}],rows,columns:["年度","缴费状态","缴费档次","实缴金额","缴费日期","补贴金额"],recordRows:rows,filters:["姓名精确匹配"]};
+async function referenceCategoriesHandler() {
+  const db = getDatabase();
+  await ensureCategories(db);
+  const { rows } = await db.pool.query(`SELECT c.category_id,c.name,c.description,COUNT(a.asset_id) FILTER (WHERE a.status='published' AND COALESCE(a.is_current,true)=true)::int AS uploaded_assets FROM reference_categories c LEFT JOIN data_assets a ON a.category_id=c.category_id GROUP BY c.category_id,c.name,c.description ORDER BY c.category_id`);
+  const builtinCounts: Record<string, number> = {};
+  for (const a of Object.values(BUILTIN_ASSETS)) builtinCounts[a.category] = (builtinCounts[a.category] || 0) + 1;
+  const out = rows.map((r: any) => ({ ...r, uploaded_assets: r.uploaded_assets || 0, total_assets: (r.uploaded_assets || 0) + (builtinCounts[r.name] || 0) }));
+  const existing = new Set(out.map((x: any) => x.name));
+  for (const [name, description] of Object.entries(CATEGORY_DESCRIPTIONS)) if (!existing.has(name)) out.push({ name, description, uploaded_assets: 0, total_assets: builtinCounts[name] || 0 });
+  return json({ ok: true, rows: out });
 }
 
-async function resolveEvent(db:any, ref:any){
-  if(!ref || ref==="latest_typhoon") { const {rows}=await db.pool.query(`SELECT * FROM events WHERE event_type='台风' AND status='已结束' ORDER BY start_time DESC LIMIT 1`); return rows[0]; }
-  const {rows}=await db.pool.query(`SELECT * FROM events WHERE event_id=$1 OR event_name ILIKE $2 ORDER BY start_time DESC LIMIT 1`,[ref,`%${ref}%`]); return rows[0];
+async function referenceAssetsHandler(url: URL) {
+  const db = getDatabase();
+  const category = cleanText(url.searchParams.get("category"));
+  const system = Object.values(BUILTIN_ASSETS).filter((a: any) => !category || a.category === category);
+  const values: any[] = [];
+  let where = `a.status='published' AND COALESCE(a.is_current,true)=true`;
+  if (category) { values.push(category); where += ` AND COALESCE(c.name,a.proposed_category)=$1`; }
+  const { rows } = await db.pool.query(`SELECT a.asset_id,a.dataset_id,a.title,a.asset_type,a.source_file_name AS source,a.description,a.fields,a.record_count,a.version_label,COALESCE(c.name,a.proposed_category) AS category,false AS system,a.searchable_text FROM data_assets a LEFT JOIN reference_categories c ON c.category_id=a.category_id WHERE ${where} ORDER BY a.published_at DESC NULLS LAST,a.created_at DESC`, values);
+  return json({ ok: true, rows: [...system, ...rows.map((r: any) => ({ ...r, ai_ready: aiReady(r) }))] });
 }
 
-async function toolEmergency(db:any, params:any){
-  const ev=await resolveEvent(db,params.event_ref); if(!ev) return {kind:"emergency_event",title:"应急事件",summary:"未找到可唯一确定的事件。",facts:[],rows:[],columns:[],recordRows:[],filters:[]};
-  const values:any[]=[ev.event_id,ev.start_time]; let where=["e.event_id=$1"]; let idx=3;
-  if(params.min_age!=null){where.push(`EXTRACT(YEAR FROM age($2::timestamp, p.birth_date))::int >= $${idx}`);values.push(+params.min_age);idx++;}
-  if(params.max_age!=null){where.push(`EXTRACT(YEAR FROM age($2::timestamp, p.birth_date))::int <= $${idx}`);values.push(+params.max_age);idx++;}
-  const {rows:peopleRows}=await db.pool.query(`SELECT DISTINCT p.person_id,p.name AS 姓名,EXTRACT(YEAR FROM age($2::timestamp,p.birth_date))::int AS 当时年龄,h.village_group AS 村组,h.address AS 家庭地址,e.shelter AS 安置地点,e.reason AS 转移原因 FROM evacuations e JOIN people p ON p.person_id=e.person_id LEFT JOIN households h ON h.household_id=p.household_id WHERE ${where.join(" AND ")} ORDER BY 当时年龄 DESC,p.name`,values);
-  const peopleFact={label:"转移人数",value:`${peopleRows.length} 人`}; const extra:any={}; let expenseFact:any=null,cadreFact:any=null;
-  if(params.include_expenses){
-    const {rows:x}=await db.pool.query(`SELECT category AS "费用类别",summary AS "摘要",expense_date AS "日期",amount AS "金额",verification_status AS "核验状态" FROM expenses WHERE event_id=$1 ORDER BY expense_date,expense_id`,[ev.event_id]);
-    extra.expense_rows=x; extra.expenses=x.filter((r:any)=>r.核验状态==='已核验').reduce((sum:number,r:any)=>sum+Number(r.金额||0),0); expenseFact={label:"已核验费用",value:`${extra.expenses.toLocaleString('zh-CN',{minimumFractionDigits:2})} 元`};
+async function referenceAssetHandler(url: URL) {
+  const id = cleanText(url.searchParams.get("id"));
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") || 50)));
+  if (!id) return json({ ok: false, error: "asset_id_required", message: "缺少资料 ID。" }, { status: 400 });
+  const db = getDatabase();
+  const out = await referenceAsset(db, id, page, limit);
+  if (!out) return json({ ok: false, error: "asset_not_found", message: "没有找到这份已发布资料。" }, { status: 404 });
+  return json({ ok: true, ...out });
+}
+
+async function sourceHandler(url: URL) {
+  const id = cleanText(url.searchParams.get("id"));
+  const db = getDatabase();
+  const { rows } = await db.pool.query(`SELECT source_blob_key,source_file_name,mime_type,status FROM data_assets WHERE asset_id=$1 LIMIT 1`, [id]);
+  const asset = rows[0];
+  if (!asset || asset.status !== "published" || !asset.source_blob_key) return json({ ok: false, error: "source_not_found", message: "源文件不存在或尚未发布。" }, { status: 404 });
+  const data = await sourceStore().get(asset.source_blob_key, { type: "arrayBuffer" });
+  if (!data) return json({ ok: false, error: "source_blob_not_found", message: "源文件存储中未找到。" }, { status: 404 });
+  return new Response(data, { headers: { "Content-Type": asset.mime_type || "application/octet-stream", "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(safeFilename(asset.source_file_name))}` } });
+}
+
+async function uploadsHandler() {
+  const db = getDatabase();
+  const { rows } = await db.pool.query(`SELECT a.*,COALESCE(c.name,a.proposed_category) AS category,d.canonical_title AS dataset_title FROM data_assets a LEFT JOIN reference_categories c ON c.category_id=a.category_id LEFT JOIN reference_datasets d ON d.dataset_id=a.dataset_id ORDER BY a.created_at DESC LIMIT 100`);
+  return json({ ok: true, rows: rows.map((a: any) => ({ ...a, ai_ready: aiReady(a) })) });
+}
+
+async function uploadHandler(req: Request) {
+  const form = await req.formData();
+  const file = form.get("file");
+  if (!(file instanceof File)) return json({ ok: false, error: "file_required", message: "请选择要上传的文件。" }, { status: 400 });
+  const name = file.name || "upload";
+  const mime = file.type || "application/octet-stream";
+  const allowed = /\.(xlsx?|csv|json|txt|md|pdf|docx?)$/i.test(name);
+  if (!allowed) return json({ ok: false, error: "unsupported_file", message: "支持 xlsx/xls/csv/json/txt/md/pdf/doc/docx。" }, { status: 415 });
+  const id = `AST-${crypto.randomUUID()}`;
+  const blobKey = `assets/${id}/${safeFilename(name)}`;
+  const bytes = await file.arrayBuffer();
+  await sourceStore().set(blobKey, bytes);
+  let assetType = "document";
+  let fields: string[] = [];
+  let rows: any[] = [];
+  let searchableText = "";
+  if (isStructuredFile(name, mime)) {
+    assetType = "structured";
+    const parsed = await parseStructured(file);
+    fields = parsed.fields;
+    rows = parsed.rows;
+  } else if (/\.(txt|md)$/i.test(name)) searchableText = cleanText(await file.text()).slice(0, 300000);
+  const classified = classifyAsset(name, fields, searchableText);
+  const db = getDatabase();
+  await db.pool.query(`INSERT INTO data_assets(asset_id,title,asset_type,source_file_name,source_blob_key,mime_type,file_size,status,proposed_category,classification_source,classification_confidence,description,fields,record_count,searchable_text,version_label,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7,'classified',$8,$9,$10,$11,$12::jsonb,$13,$14,'v1','demo-admin')`, [id, name.replace(/\.[^.]+$/, ""), assetType, name, blobKey, mime, file.size, classified.category, classified.source, classified.confidence, `管理员上传：${name}`, JSON.stringify(fields), rows.length, searchableText || null]);
+  if (rows.length) {
+    const client = await db.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (let i = 0; i < rows.length; i++) await client.query(`INSERT INTO data_asset_records(asset_id,row_no,data) VALUES($1,$2,$3::jsonb)`, [id, i + 1, JSON.stringify(rows[i])]);
+      await client.query("COMMIT");
+    } catch (e) { await client.query("ROLLBACK"); throw e; } finally { client.release(); }
   }
-  if(params.include_cadres){ const {rows:c}=await db.pool.query(`SELECT c.name AS 姓名,c.role AS 职务,ec.task_role AS 任务角色,ec.responsibility_area AS 负责区域 FROM event_cadres ec JOIN cadres c ON c.cadre_id=ec.cadre_id WHERE ec.event_id=$1 AND ec.confirmation_status='已确认' ORDER BY c.cadre_id`,[ev.event_id]); extra.cadres=c; cadreFact={label:"参与干部",value:`${c.length} 人`}; }
-  const focus=params.focus||"people"; let facts:any[]=[peopleFact],rows:any[]=params.detail?peopleRows:[],columns=["姓名","当时年龄","村组","家庭地址","安置地点","转移原因"],recordRows:any[]=peopleRows,summary=`${ev.event_name}符合当前筛选条件的转移人员共 ${peopleRows.length} 人。`;
-  if(expenseFact) facts.push(expenseFact); if(cadreFact) facts.push(cadreFact);
-  if(focus==="expenses" && expenseFact){facts=[expenseFact,peopleFact,...(cadreFact?[cadreFact]:[])];rows=params.detail?(extra.expense_rows||[]):[];","安置��","村�Cv移原因"],recopws||[]):[];","gth} 条`},{D ec.confirmationfacts=[erecordR AS 实缴釮�庭�ws:any[]s=param费用"|policy|mixed|gap","dpolicy��瑘要",expense_date A){sub+=要",expe�`},{D ec.bel:"�$0"colopenses.toLocaleString([firpenses.to",expe�` 0 a 0; ",expe� a 0; "v移原因"],rseho:irmationfactsa 0; 
-  const peop��,h.a`};
+  const asset = { asset_id: id, title: name.replace(/\.[^.]+$/, ""), source_file_name: name, mime_type: mime, file_size: file.size, asset_type: assetType, record_count: rows.length, fields, status: "classified", proposed_category: classified.category, category: classified.category, classification_source: classified.source, classification_confidence: classified.confidence, ai_ready: assetType === "structured" || !!searchableText };
+  return json({ ok: true, asset });
+}
+
+async function publishHandler(req: Request) {
+  const body: any = await req.json().catch(() => ({}));
+  const assetId = cleanText(body.asset_id);
+  const categoryName = cleanText(body.category_name) || "其他资料";
+  const datasetTitle = cleanText(body.dataset_title);
+  if (!assetId) return json({ ok: false, error: "asset_id_required", message: "缺少资料 ID。" }, { status: 400 });
+  const db = getDatabase();
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: assets } = await client.query(`SELECT * FROM data_assets WHERE asset_id=$1 FOR UPDATE`, [assetId]);
+    const asset = assets[0];
+    if (!asset) throw new Error("ASSET_NOT_FOUND");
+    const { rows: cats } = await client.query(`INSERT INTO reference_categories(name,description) VALUES($1,$2) ON CONFLICT(name) DO UPDATE SET updated_at=NOW() RETURNING category_id`, [categoryName, CATEGORY_DESCRIPTIONS[categoryName] || "管理员发布的参考资料"]);
+    const categoryId = cats[0].category_id;
+    const canonicalTitle = datasetTitle || asset.title;
+    const { rows: dsRows } = await client.query(`SELECT * FROM reference_datasets WHERE category_id=$1 AND canonical_title=$2 FOR UPDATE`, [categoryId, canonicalTitle]);
+    let datasetId = dsRows[0]?.dataset_id;
+    if (!datasetId) {
+      datasetId = `DS-${crypto.randomUUID()}`;
+      await client.query(`INSERT INTO reference_datasets(dataset_id,canonical_title,category_id) VALUES($1,$2,$3)`, [datasetId, canonicalTitle, categoryId]);
+    }
+    const { rows: vRows } = await client.query(`SELECT COALESCE(MAX(version_number),0)::int + 1 AS v FROM data_assets WHERE dataset_id=$1`, [datasetId]);
+    const version = vRows[0]?.v || 1;
+    await client.query(`UPDATE data_assets SET is_current=false WHERE dataset_id=$1`, [datasetId]);
+    await client.query(`UPDATE data_assets SET category_id=$2,proposed_category=$3,dataset_id=$4,version_number=$5,version_label=$6,is_current=true,status='published',published_at=NOW(),updated_at=NOW() WHERE asset_id=$1`, [assetId, categoryId, categoryName, datasetId, version, `v${version}`]);
+    await client.query(`UPDATE reference_datasets SET current_asset_id=$2,updated_at=NOW() WHERE dataset_id=$1`, [datasetId, assetId]);
+    await client.query("COMMIT");
+    return json({ ok: true, asset_id: assetId, dataset_id: datasetId, version_number: version, version_label: `v${version}`, category: categoryName });
+  } catch (e: any) {
+    await client.query("ROLLBACK");
+    const message = e?.message === "ASSET_NOT_FOUND" ? "没有找到这份上传资料。" : "发布失败，请稍后重试。";
+    return json({ ok: false, error: e?.message || "publish_failed", message }, { status: e?.message === "ASSET_NOT_FOUND" ? 404 : 500 });
+  } finally { client.release(); }
+}
+
+async function lightweightList(table: string, orderBy: string) {
+  const db = getDatabase();
+  const allowed = new Set(["policies","events","expenses"]);
+  if (!allowed.has(table)) return json({ ok: false, error: "not_allowed" }, { status: 400 });
+  const { rows } = await db.pool.query(`SELECT * FROM ${table} ORDER BY ${orderBy} LIMIT 200`);
+  return json({ ok: true, rows });
+}
+
+export default async (req: Request, _context: Context) => {
+  const url = new URL(req.url);
+  const path = url.pathname;
+  try {
+    if (path === "/api/status" && req.method === "GET") return statusHandler();
+    if (path === "/api/query" && req.method === "POST") return queryHandler(req);
+    if (path === "/api/audit" && req.method === "GET") return auditHandler();
+    if (path === "/api/reference/categories" && req.method === "GET") return referenceCategoriesHandler();
+    if (path === "/api/reference/assets" && req.method === "GET") return referenceAssetsHandler(url);
+    if (path === "/api/reference/asset" && req.method === "GET") return referenceAssetHandler(url);
+    if (path === "/api/reference/source" && req.method === "GET") return sourceHandler(url);
+    if (path === "/api/governance/uploads" && req.method === "GET") return uploadsHandler();
+    if (path === "/api/governance/upload" && req.method === "POST") return uploadHandler(req);
+    if (path === "/api/governance/publish" && req.method === "POST") return publishHandler(req);
+    if (path === "/api/catalog" && req.method === "GET") { const db=getDatabase(); const {rows}=await db.pool.query(`SELECT * FROM data_catalog ORDER BY domain_id`); return json({ok:true,rows}); }
+    if (path === "/api/policies" && req.method === "GET") return lightweightList("policies", "published_date DESC");
+    if (path === "/api/events" && req.method === "GET") return lightweightList("events", "start_time DESC");
+    if (path === "/api/ledgers" && req.method === "GET") { const db=getDatabase(); const {rows}=await db.pool.query(`SELECT 'people' AS ledger,COUNT(*)::int AS records FROM people UNION ALL SELECT 'pension_payments',COUNT(*)::int FROM pension_payments UNION ALL SELECT 'welfare_records',COUNT(*)::int FROM welfare_records UNION ALL SELECT 'evacuations',COUNT(*)::int FROM evacuations UNION ALL SELECT 'expenses',COUNT(*)::int FROM expenses`); return json({ok:true,rows}); }
+    return json({ ok: false, error: "not_found" }, { status: 404 });
+  } catch (e: any) {
+    console.error("api error", e);
+    return json({ ok: false, error: "internal_error", message: e?.message || "服务暂时不可用。" }, { status: 500 });
   }
-  if(params.N cadres c Ora.expenceContext?.act]:[]+/*de=["pp.here.push(`${ere.push(`${ere.adres c Ora��龄,h.vre.ag`,[reber(r.金$  cons","�
-  ifere.adifere.c Ora���ent_cadrea��龄,h.ECT DISTINC���fild WHERvr(rdreFacOra���erificati=="expn tool�fild W�S
-ti=="f�erifins:["setRef(s( functioooleho:irtool�fillllehoople"; ve-vie移ssisrtool�符合�llllehoople";C*{:[];","宣;",�fild Wfilll���lllram househollllram h��地�rea��
+};
+
+export const config: Config = {
+  path: [
+    "/api/status","/api/query","/api/audit","/api/catalog","/api/policies","/api/events","/api/ledgers",
+    "/api/reference/categories","/api/reference/assets","/api/reference/asset","/api/reference/source",
+    "/api/governance/uploads","/api/governance/upload","/api/governance/publish",
+  ],
+};
