@@ -1,4 +1,4 @@
-# retrigger: 2026-09-04 DOCX parser work, fixed bootstrap order
+# retrigger: 2026-09-04 DOCX parser work, use verified split segment 03a-03d
 name: Bootstrap project source
 
 on:
@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04 .bootstrap/part-05 .bootstrap/part-06 .bootstrap/part-07 .bootstrap/part-08 > /tmp/core.b64
+          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03a .bootstrap/part-03b .bootstrap/part-03c .bootstrap/part-03d .bootstrap/part-04 .bootstrap/part-05 .bootstrap/part-06 .bootstrap/part-07 .bootstrap/part-08 > /tmp/core.b64
           base64 -d /tmp/core.b64 > /tmp/core.tar.xz
           xz -t /tmp/core.tar.xz
           tar -xJf /tmp/core.tar.xz -C .
