@@ -83,3 +83,25 @@ jobs:
           path: /tmp/governance-ai-source
           include-hidden-files: true
           retention-days: 1
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN || secrets.NETLIFY_TOKEN || secrets.NETLIFY_PERSONAL_ACCESS_TOKEN }}
+      NETLIFY_SITE_ID: 89dfa228-952e-4712-8a99-9344cb0ea5fd
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Netlify deployment credential
+        run: |
+          if [ -n "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "Netlify credential is configured."
+          else
+            echo "Netlify credential is not configured; deployment step will be skipped."
+          fi
+      - name: Deploy production to existing Netlify site
+        if: env.NETLIFY_AUTH_TOKEN != ''
+        run: npx -y netlify-cli@latest deploy --prod --build --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
