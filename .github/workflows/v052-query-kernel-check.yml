@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'netlify/functions/structured-query.mts'
+      - 'netlify/functions/agent-v053.mts'
       - 'netlify/edge-functions/intent-router.ts'
       - 'package.json'
       - 'V052_CHANGELOG.md'
@@ -24,7 +25,9 @@ jobs:
       - run: npm install
       - name: Bundle V0.5.2 serverless query kernel
         run: npx --yes esbuild netlify/functions/structured-query.mts --bundle --platform=node --format=esm --outfile=/tmp/structured-query.mjs --external:@netlify/functions --external:@netlify/database
-      - name: Bundle V0.5.2 intent edge function
+      - name: Bundle current Agent
+        run: npx --yes esbuild netlify/functions/agent-v053.mts --bundle --platform=node --format=esm --outfile=/tmp/agent-v053.mjs --external:@netlify/functions --external:@netlify/database
+      - name: Bundle current conversation edge function
         run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
       - name: Static architecture and field coverage assertions
         shell: bash
@@ -32,6 +35,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('netlify/functions/structured-query.mts').read_text(encoding='utf-8')
+          a=Path('netlify/functions/agent-v053.mts').read_text(encoding='utf-8')
           e=Path('netlify/edge-functions/intent-router.ts').read_text(encoding='utf-8')
           required_datasets=['people','households','household_members','pension','pension_accounts','welfare','evacuations','events','cadres','event_cadres','expenses','policies']
           for d in required_datasets:
@@ -48,9 +52,13 @@ jobs:
           assert '不写SQL' in s
           assert '禁止静默丢条件' in s
           assert 'queryFilters(' not in s
-          assert '/api/query-v052-exec' in e
-          assert 'queryspec-v052' in e
-          print('V0.5.2 static architecture assertions passed')
+
+          # Current architecture: Edge -> Agent -> V0.5.2 QuerySpec kernel.
+          assert '/api/agent-v053' in e
+          assert '/api/query-v052-exec' in a
+          assert 'queryspec-v052' in a
+          assert "tool==='structured_query'" in a
+          print('V0.5.2 QuerySpec architecture assertions passed behind Agent routing')
           PY
       - name: Demo-data combination sanity checks
         run: |
@@ -67,7 +75,6 @@ jobs:
           women=[r for r in older if r.get('性别')=='女']
           g2=[r for r in women if r.get('村组')=='2组']
           assert len(g2)<=len(women)<=len(older)<=len(p)
-          # 这些组合必须能被真实字段表达，不能靠姓名正则猜测。
           assert all('姓名' in r and '年龄' in r and '性别' in r and '村组' in r for r in p[:20])
           print('demo combination sanity:', {'70+':len(older),'70+女性':len(women),'2组70+女性':len(g2)})
           PY
