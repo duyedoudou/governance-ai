@@ -5,6 +5,7 @@ on:
     paths:
       - 'netlify/edge-functions/**'
       - 'site/intent-ui.js'
+      - 'site/index.html'
       - 'package.json'
       - 'V051_CHANGELOG.md'
       - '.github/workflows/v051-intent-check.yml'
@@ -21,8 +22,10 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - name: Check intent UI syntax
-        run: node --check site/intent-ui.js
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check site/intent-ui.js
+          node --check site/docx-integration.js
       - name: Bundle intent edge function
         run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
       - name: Static routing assertions
@@ -31,6 +34,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('netlify/edge-functions/intent-router.ts').read_text(encoding='utf-8')
+          html=Path('site/index.html').read_text(encoding='utf-8')
           required=[
             'mode: "chat"',
             'mode: "system_help"',
@@ -40,9 +44,11 @@ jobs:
             '绝不能默认人口查询',
             '/api/query',
             '/api/reference/document/query',
-            '/docx-integration.js',
+            '/api/status',
           ]
           for x in required:
             assert x in s, x
+          assert '<script src="./intent-ui.js"></script>' in html
+          assert 'V0.5.1' in html
           print('V0.5.1 routing assertions passed')
           PY
