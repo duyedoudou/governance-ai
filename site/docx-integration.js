@@ -2,6 +2,39 @@
   const isDocx = value => /\.docx$/i.test(String(value || ""));
   const needsDocxText = asset => isDocx(asset?.source_file_name) && asset?.ai_ready === false;
 
+  // Preserve document metadata in the conversation context so follow-up questions
+  // can use the dedicated full-text document query path instead of the generic table planner.
+  const baseSetQueryContext = setQueryContext;
+  setQueryContext = function setQueryContextWithDocumentType(ctx) {
+    if (ctx?.asset_id) {
+      const active = state.reference?.asset?.asset;
+      if (active?.asset_id === ctx.asset_id) {
+        ctx = {
+          ...ctx,
+          asset_type: active.asset_type,
+          source_file_name: active.source,
+        };
+      }
+    }
+    return baseSetQueryContext(ctx);
+  };
+
+  // Route published document conversations to a document-specific full-text QA endpoint.
+  // Structured tables continue to use the original /api/query route unchanged.
+  const baseApi = api;
+  api = async function apiWithDocumentRouting(url, opts = {}) {
+    if (url === "/api/query" && state.queryContext?.asset_type === "document") {
+      let body = {};
+      try { body = JSON.parse(opts.body || "{}"); } catch {}
+      return baseApi("/api/reference/document/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, reference_context: state.queryContext }),
+      });
+    }
+    return baseApi(url, opts);
+  };
+
   async function parseDocxAsset(assetId, button) {
     if (!assetId) return null;
     if (button) {
