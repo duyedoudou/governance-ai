@@ -1,0 +1,17 @@
+{
+  "name": "huanglinkeng-rural-governance-agent-v049",
+  "private": true,
+  "version": "0.4.9",
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "latest",
+    "@netlify/database": "latest",
+    "@netlify/functions": "latest",
+    "xlsx": "latest"
+  },
+  "scripts": {
+    "netlify:build": "netlify build --debug",
+    "netlify:deploy": "netlify deploy --prod --build --debug",
+    "db:status": "netlify database status --branch production --debug"
+  }
+}
