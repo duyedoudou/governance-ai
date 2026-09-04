@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/v053-agent-knowledge-check.yml'
       - 'netlify/functions/agent-v053.mts'
       - 'netlify/functions/knowledge.mts'
       - 'netlify/lib/knowledge-core.mts'
