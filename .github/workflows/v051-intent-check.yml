@@ -1,0 +1,48 @@
+name: V0.5.1 intent routing check
+
+on:
+  push:
+    paths:
+      - 'netlify/edge-functions/**'
+      - 'site/intent-ui.js'
+      - 'package.json'
+      - 'V051_CHANGELOG.md'
+      - '.github/workflows/v051-intent-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Check intent UI syntax
+        run: node --check site/intent-ui.js
+      - name: Bundle intent edge function
+        run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
+      - name: Static routing assertions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('netlify/edge-functions/intent-router.ts').read_text(encoding='utf-8')
+          required=[
+            'mode: "chat"',
+            'mode: "system_help"',
+            'mode: "governance_query"',
+            'mode: "document_query"',
+            'mode: "clarify"',
+            '绝不能默认人口查询',
+            '/api/query',
+            '/api/reference/document/query',
+            '/docx-integration.js',
+          ]
+          for x in required:
+            assert x in s, x
+          print('V0.5.1 routing assertions passed')
+          PY
