@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <meta name="theme-color" content="#F8FAFD" />
+  <title>黄林坑村治理智能助手 · V0.4.9</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="top-nav" aria-label="主导航">
+    <div class="nav-inner">
+      <button class="brand-button" data-view="assistant" aria-label="返回智能咨询首页">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        <span class="brand-name">黄林坑村治理AI</span>
+      </button>
+
+      <nav class="desktop-nav" aria-label="主要功能">
+        <button class="nav-link active" data-view="assistant">智能咨询</button>
+        <button class="nav-link" data-view="history">历史记录</button>
+        <div class="menu-wrap">
+          <button class="nav-link" id="moreMenuBtn" aria-haspopup="true" aria-expanded="false">更多</button>
+          <div class="popover-menu" id="moreMenu" role="menu">
+            <button data-view="favorites" role="menuitem"><b>收藏 / 常用</b><small>快速重复高频治理查询</small></button>
+            <button data-view="reference" role="menuitem"><b>参考数据</b><small>查阅 AI 背后的已发布资料</small></button>
+            <button data-view="audit" role="menuitem"><b>审计记录</b><small>查看查询与执行留痕</small></button>
+          </div>
+        </div>
+      </nav>
+
+      <div class="nav-actions">
+        <span class="connection-badge" id="dataStatus" role="status">数据连接中</span>
+        <div class="user-wrap">
+          <button class="admin-menu-button" id="userMenuBtn" aria-haspopup="true" aria-expanded="false" aria-label="打开管理员菜单">
+            <span>演示管理员</span><span class="admin-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div class="popover-menu user-menu" id="userMenu" role="menu">
+            <button data-view="governance" role="menuitem"><b>数据治理</b><small>上传已清洗数据并确认发布</small></button>
+          </div>
+        </div>
+        <button class="mobile-menu-button" id="mobileMenuBtn" aria-label="打开导航菜单" aria-expanded="false">☰</button>
+      </div>
+    </div>
+    <div class="mobile-nav" id="mobileNav">
+      <button data-view="assistant">智能咨询</button>
+      <button data-view="history">历史记录</button>
+      <button data-view="reference">参考数据</button>
+      <button data-view="audit">审计记录</button>
+      <button class="mobile-admin-entry" data-view="governance">管理员 · 数据治理</button>
+    </div>
+  </header>
+
+  <main class="site-main">
+    <section id="assistantView" class="view active-view assistant-view" aria-labelledby="heroTitle">
+      <div class="assistant-scroll" id="conversationScroll">
+        <div class="hero" id="welcomeCard">
+          <div class="hero-glow" aria-hidden="true"></div>
+          <div class="hero-content">
+            <span class="hero-eyebrow">黄林坑村 · 只读治理智能助手</span>
+            <h1 id="heroTitle">直接问黄林坑村的事</h1>
+            <p class="hero-lead">人口、养老、应急、政策和材料生成，都可以从一句话开始。</p>
+
+            <div class="capability-grid" aria-label="核心能力">
+              <article class="capability-card">
+                <span class="line-icon" aria-hidden="true">⌕</span>
+                <div><h2>智能查询</h2><p>直接用自然语言查询已发布治理数据。</p></div>
+              </article>
+              <article class="capability-card">
+                <span class="line-icon" aria-hidden="true">≡</span>
+                <div><h2>政策解读</h2><p>结合已发布政策给出可追溯的解释。</p></div>
+              </article>
+              <article class="capability-card">
+                <span class="line-icon" aria-hidden="true">↗</span>
+                <div><h2>生成材料</h2><p>把查询结果整理成 Excel、Word 或 PPT。</p></div>
+              </article>
+            </div>
+
+            <p class="trust-line"><span aria-hidden="true">✓</span> 只读取已清洗并发布的数据，所有结论都可以追溯来源。</p>
+          </div>
+        </div>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div class="conversation-bottom-space" aria-hidden="true"></div>
+      </div>
+
+      <div class="composer-shell" id="composerShell">
+        <div class="composer-wrap">
+          <div class="active-reference-context" id="activeReferenceContext" hidden>
+            <span>当前参考资料：<b id="activeReferenceTitle">—</b></span>
+            <button id="clearReferenceContext" type="button">退出当前资料</button>
+          </div>
+          <label for="queryInput" class="sr-only">请输入想查询的黄林坑村治理问题</label>
+          <div class="composer" id="composer">
+            <span class="ai-spark" aria-hidden="true">✦</span>
+            <textarea id="queryInput" rows="1" placeholder="请输入你想查询的黄林坑村治理问题"></textarea>
+            <button id="sendBtn" class="send-btn" aria-label="发送问题">↑</button>
+          </div>
+          <div class="composer-meta">
+            <span id="contextDomain">自动识别数据域</span>
+            <span class="meta-sep">·</span>
+            <span id="contextDetail">仅查询已清洗并发布的数据</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="historyView" class="view content-view" aria-labelledby="historyTitle">
+      <div class="content-page reading-width">
+        <div class="page-heading">
+          <span class="section-eyebrow">历史记录</span>
+          <h1 id="historyTitle">回看之前问过的问题</h1>
+          <p>点击任意记录，可以重新交给 AI 查询。</p>
+        </div>
+        <div id="historyList" class="simple-list"></div>
+      </div>
+    </section>
+
+    <section id="favoritesView" class="view content-view" aria-labelledby="favoritesTitle">
+      <div class="content-page reading-width">
+        <div class="page-heading">
+          <span class="section-eyebrow">收藏</span>
+          <h1 id="favoritesTitle">常用问题</h1>
+          <p>把高频查询留在这里，减少重复输入。</p>
+        </div>
+        <div id="favoriteList" class="simple-list"></div>
+      </div>
+    </section>
+
+    <section id="referenceView" class="view content-view" aria-labelledby="referenceTitle">
+      <div class="content-page">
+        <div class="page-heading compact-heading">
+          <span class="section-eyebrow">参考数据</span>
+          <h1 id="referenceTitle">AI 背后的已发布资料</h1>
+          <p>需要人工核验时，再从分类进入数据集和原始记录。</p>
+        </div>
+        <div class="breadcrumbs" id="referenceBreadcrumbs"><button data-ref-home>参考数据</button></div>
+        <div id="referenceContent"></div>
+      </div>
+    </section>
+
+    <section id="governanceView" class="view content-view" aria-labelledby="governanceTitle">
+      <div class="content-page">
+        <div class="page-heading compact-heading admin-heading">
+          <div>
+            <span class="section-eyebrow">管理员 · 数据治理</span>
+            <h1 id="governanceTitle">发布已清洗的数据</h1>
+            <p>上传后先自动分类，再由管理员确认；确认发布后 AI 才能读取。</p>
+          </div>
+          <span class="admin-pill">管理员入口</span>
+        </div>
+
+        <ol class="process-line" aria-label="数据发布流程">
+          <li><span>1</span>上传已清洗文件</li>
+          <li><span>2</span>自动建议分类</li>
+          <li><span>3</span>人工确认</li>
+          <li><span>4</span>发布给 AI</li>
+        </ol>
+
+        <div class="upload-zone" id="uploadZone">
+          <input type="file" id="governanceFile" accept=".xlsx,.xls,.csv,.json,.txt,.md,.pdf,.doc,.docx" hidden />
+          <span class="upload-symbol" aria-hidden="true">↑</span>
+          <h2>上传已清洗数据</h2>
+          <p>结构化文件可解析入库；文档可保存源文件并完成分类归档。</p>
+          <button class="primary-btn" id="chooseFileBtn">选择文件</button>
+          <small>上传成功不代表 AI 可用，必须完成发布确认。</small>
+        </div>
+
+        <div id="classificationReview"></div>
+        <div class="subsection-heading"><h2>最近上传</h2><span>已上传 / 待确认 / 已发布</span></div>
+        <div id="uploadList" class="upload-list"></div>
+      </div>
+    </section>
+
+    <section id="auditView" class="view content-view" aria-labelledby="auditTitle">
+      <div class="content-page reading-width">
+        <div class="page-heading">
+          <span class="section-eyebrow">审计记录</span>
+          <h1 id="auditTitle">查询与执行留痕</h1>
+          <p>记录原始提问、模型模式、数据库执行与结果摘要。</p>
+        </div>
+        <div id="auditList" class="simple-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="drawerBackdrop" class="drawer-backdrop"></div>
+  <aside id="detailDrawer" class="detail-drawer" aria-hidden="true" aria-labelledby="drawerTitle">
+    <div class="drawer-head">
+      <div><span class="section-eyebrow" id="drawerEyebrow">详情</span><h2 id="drawerTitle">详情</h2></div>
+      <button id="drawerClose" class="icon-btn" aria-label="关闭详情">×</button>
+    </div>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
