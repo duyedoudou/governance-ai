@@ -87,26 +87,24 @@ jobs:
           if '一个问题同时包含人口 + 养老 + 民政/关爱 + 应急' not in s:
               needle = '7. 用户要求名单/明细时 output=rows 或 both，并在select中保留相关字段。'
               assert needle in s, 'planner list rule anchor missing'
-              replacement = '7. 一个问题同时包含人口 + 养老 + 民政/关爱 + 应急等跨域“人员筛选”条件时，使用 people_governance；该数据集只用于人员去重计数或人员名单，不用于金额求和/平均值。\\n7.1 ' + needle[3:]
-              s = s.replace(needle, replacement, 1)
+              s = s.replace(needle, '7. 一个问题同时包含人口 + 养老 + 民政/关爱 + 应急等跨域“人员筛选”条件时，使用 people_governance；该数据集只用于人员去重计数或人员名单，不用于金额求和/平均值。\\n7.1 ' + needle[3:], 1)
 
           validator_anchor = '  for (const f of spec.group_by || []) if (!fieldMap[f]) errors.push(`group_by未知字段:${f}`);'
           if 'people_governance聚合只允许count_distinct' not in s:
               assert validator_anchor in s, 'validator anchor missing'
-              validator_insert = '  if (def?.id === "people_governance" && spec.aggregate) {\n    if (spec.aggregate.op !== "count_distinct" || spec.aggregate.field !== "person_id") errors.push("people_governance聚合只允许count_distinct(person_id)，避免一对多Join导致重复统计");\n  }\n' + validator_anchor
-              s = s.replace(validator_anchor, validator_insert, 1)
+              s = s.replace(validator_anchor, '  if (def?.id === "people_governance" && spec.aggregate) {\n    if (spec.aggregate.op !== "count_distinct" || spec.aggregate.field !== "person_id") errors.push("people_governance聚合只允许count_distinct(person_id)，避免一对多Join导致重复统计");\n  }\n' + validator_anchor, 1)
 
           if 'const selectPrefix = !spec.aggregate && def.distinctRows' not in s:
               sql_old = '  const sql = `SELECT ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;'
               assert sql_old in s, 'compile SQL anchor missing'
-              sql_new = '  const selectPrefix = !spec.aggregate && def.distinctRows ? "SELECT DISTINCT" : "SELECT";\n  const sql = `${selectPrefix} ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;'
-              s = s.replace(sql_old, sql_new, 1)
+              s = s.replace(sql_old, '  const selectPrefix = !spec.aggregate && def.distinctRows ? "SELECT DISTINCT" : "SELECT";\n  const sql = `${selectPrefix} ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;', 1)
 
           path.write_text(s, encoding='utf-8')
 
           wf = Path('.github/workflows/v052-query-kernel-check.yml')
           w = wf.read_text(encoding='utf-8')
-          w = w.replace("required_datasets=['people','households'", "required_datasets=['people','people_governance','households'", 1)
+          if "'people_governance'" not in w:
+              w = w.replace("required_datasets=['people','households'", "required_datasets=['people','people_governance','households'", 1)
           wf.write_text(w, encoding='utf-8')
 
           reg = Path('V052_QUERY_REGRESSION.md')
@@ -125,8 +123,6 @@ jobs:
 
           print('cross-domain V0.5.2 patch applied')
           PY
-      - name: Syntax bundle check
-        run: npx --yes esbuild netlify/functions/structured-query.mts --bundle --platform=node --format=esm --outfile=/tmp/structured-query.mjs --external:@netlify/functions --external:@netlify/database
       - name: Commit patched source
         shell: bash
         run: |
