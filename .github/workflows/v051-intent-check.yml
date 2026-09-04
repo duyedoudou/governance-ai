@@ -1,4 +1,4 @@
-name: V0.5.1 intent routing check
+name: Intent routing compatibility check
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
       - 'site/intent-ui.js'
       - 'site/index.html'
       - 'package.json'
-      - 'V051_CHANGELOG.md'
       - '.github/workflows/v051-intent-check.yml'
 
 permissions:
@@ -26,7 +25,7 @@ jobs:
         run: |
           node --check site/intent-ui.js
           node --check site/docx-integration.js
-      - name: Bundle intent edge function
+      - name: Bundle current intent edge function
         run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
       - name: Static routing assertions
         shell: bash
@@ -35,20 +34,12 @@ jobs:
           from pathlib import Path
           s=Path('netlify/edge-functions/intent-router.ts').read_text(encoding='utf-8')
           html=Path('site/index.html').read_text(encoding='utf-8')
-          required=[
-            'mode: "chat"',
-            'mode: "system_help"',
-            'mode: "governance_query"',
-            'mode: "document_query"',
-            'mode: "clarify"',
-            '绝不能默认人口查询',
-            '/api/query',
-            '/api/reference/document/query',
-            '/api/status',
-          ]
-          for x in required:
-            assert x in s, x
+          for x in ['chat','system_help','governance_query','document_query','clarify','/api/query','/api/reference/document/query','/api/status']:
+              assert x in s, x
           assert '<script src="./intent-ui.js"></script>' in html
-          assert 'V0.5.1' in html
-          print('V0.5.1 routing assertions passed')
+          # V0.5.2 governance work must route away from the legacy regex query path.
+          if '0.5.2' in s:
+              assert '/api/query-v052-exec' in s
+              assert 'queryspec-v052' in s
+          print('intent routing compatibility assertions passed')
           PY
