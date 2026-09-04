@@ -1,14 +1,14 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v052-deploy.log"
+LOG="$PWD/netlify-v053-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
 SITE_ID="89dfa228-952e-4712-8a99-9344cb0ea5fd"
 BACKUP_DIR="$PWD/.migration-backup-$(date +%Y%m%d-%H%M%S)"
 
-echo "=== 黄林坑村治理智能助手 V0.5.2 部署 ==="
-echo "QuerySpec结构化查询内核 + 约束完整性校验 + 对话意图路由 + DOCX问答 + 资料删除 + AI村长头像"
+echo "=== 黄林坑村治理智能助手 V0.5.3 部署 ==="
+echo "Agent Planner + 全局知识检索 + Hybrid Search + 多源融合 + V0.5.2 QuerySpec"
 echo "目录: $PWD"
 
 echo "\n[1/8] 检查 Node / npm"
@@ -46,8 +46,8 @@ cat > .netlify/state.json <<STATE
 STATE
 npx netlify status || true
 
-echo "\n[6/8] 同步 production migration 历史"
-echo "说明：只同步 migration 文件，不会删除或重建生产数据库。"
+echo "\n[6/8] 对齐 production migration 历史，并保留本版本新增 migration"
+echo "说明：已执行过的 migration 以 production 为准；本地仅追加 production 尚不存在的新 migration，不会改写历史。"
 mkdir -p "$BACKUP_DIR"
 if [ -d netlify/database/migrations ]; then
   cp -R netlify/database/migrations "$BACKUP_DIR/migrations-before-sync"
@@ -63,7 +63,21 @@ if [ "$MIG_STATUS" -ne 0 ]; then
   exit "$MIG_STATUS"
 fi
 
-echo "production migrations 已同步。"
+LOCAL_BACKUP="$BACKUP_DIR/migrations-before-sync"
+if [ -d "$LOCAL_BACKUP" ]; then
+  for migration_dir in "$LOCAL_BACKUP"/*; do
+    [ -d "$migration_dir" ] || continue
+    name="$(basename "$migration_dir")"
+    if [ ! -e "netlify/database/migrations/$name" ]; then
+      echo "追加本版本新 migration: $name"
+      cp -R "$migration_dir" "netlify/database/migrations/$name"
+    else
+      echo "保留 production 历史 migration: $name"
+    fi
+  done
+fi
+
+echo "migration 已对齐；旧历史来自 production，新 migration 保留在本地等待部署。"
 npx netlify database status --branch production || true
 
 echo "\n[7/8] 本地 Netlify build"
@@ -79,9 +93,9 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "本次版本：V0.5.2（QuerySpec结构化查询 + Constraint Completeness + 意图路由 + DOCX问答 + 资料删除 + AI村长头像）。"
-  echo "请重点回归：70岁以上人数、2组70岁以上女性、2026年2组未缴养老保险女性、未核验且金额>1000的费用。"
-  echo "production migration 历史已与 Netlify Database 对齐。"
+  echo "本次版本：V0.5.3（Agent Planner + 全局知识检索 + Hybrid Search + 多源融合 + QuerySpec）。"
+  echo "请重点回归：蜂蜜生产情况、70岁以上人数、跨域人员筛选、多资料同主题融合、资料冲突提示。"
+  echo "production migration 历史已对齐；006_knowledge-retrieval 会作为新增 migration 应用。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
   echo "\n部署没有完成。完整日志：$LOG"
