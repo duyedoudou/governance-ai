@@ -24,7 +24,6 @@ jobs:
 
           path = Path('netlify/functions/structured-query.mts')
           s = path.read_text(encoding='utf-8')
-
           old = 'type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef> };'
           new = 'type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef>; distinctRows?: boolean };'
           if old in s:
@@ -80,8 +79,7 @@ jobs:
                 },
               },
               ''').strip('\n')
-              block = "  },\n" + textwrap.indent(body, "  ") + "\n  households: {"
-              s = s.replace(anchor, block, 1)
+              s = s.replace(anchor, "  },\n" + textwrap.indent(body, "  ") + "\n  households: {", 1)
 
           s = s.replace('people/welfare/evacuations优先 count_distinct(person_id)', 'people/welfare/evacuations/people_governance优先 count_distinct(person_id)', 1)
           if '一个问题同时包含人口 + 养老 + 民政/关爱 + 应急' not in s:
@@ -98,20 +96,12 @@ jobs:
               sql_old = '  const sql = `SELECT ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;'
               assert sql_old in s, 'compile SQL anchor missing'
               s = s.replace(sql_old, '  const selectPrefix = !spec.aggregate && def.distinctRows ? "SELECT DISTINCT" : "SELECT";\n  const sql = `${selectPrefix} ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;', 1)
-
           path.write_text(s, encoding='utf-8')
-
-          wf = Path('.github/workflows/v052-query-kernel-check.yml')
-          w = wf.read_text(encoding='utf-8')
-          if "'people_governance'" not in w:
-              w = w.replace("required_datasets=['people','households'", "required_datasets=['people','people_governance','households'", 1)
-          wf.write_text(w, encoding='utf-8')
 
           reg = Path('V052_QUERY_REGRESSION.md')
           r = reg.read_text(encoding='utf-8')
           if '2026年未缴养老保险、同时属于独居关爱且60岁以上的人数' not in r:
-              marker = '## 失败策略'
-              assert marker in r
+              marker = '## 失败策略'; assert marker in r
               addition = '''## 跨域人员组合\n\n- `2026年未缴养老保险、同时属于独居关爱且60岁以上的人数` → 使用 `people_governance`，养老年度、缴费状态、关爱事项、年龄全部进入计划，聚合固定为 `count_distinct(person_id)`。\n- `2组、女性、2026年未缴养老保险、同时有重点转移记录的人员名单` → 使用 `people_governance` 并输出去重人员名单。\n- 跨域人员视图禁止金额 `sum/avg`，金额统计必须走对应单业务数据集，避免一对多 Join 放大。\n\n'''
               reg.write_text(r.replace(marker, addition + marker, 1), encoding='utf-8')
 
@@ -120,7 +110,6 @@ jobs:
           if '## 跨域人员筛选' not in c:
               c += '\n## 跨域人员筛选\n\n新增 `people_governance` 只读逻辑视图，用于人口 + 养老 + 民政/关爱 + 应急的人员级组合筛选。人员列表去重；聚合只允许 `count_distinct(person_id)`，金额聚合必须走单业务数据集，避免一对多 Join 放大。\n'
               ch.write_text(c, encoding='utf-8')
-
           print('cross-domain V0.5.2 patch applied')
           PY
       - name: Commit patched source
@@ -128,7 +117,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add netlify/functions/structured-query.mts .github/workflows/v052-query-kernel-check.yml V052_CHANGELOG.md V052_QUERY_REGRESSION.md
+          git add netlify/functions/structured-query.mts V052_CHANGELOG.md V052_QUERY_REGRESSION.md
           git diff --cached --quiet && exit 0
           git commit -m "feat: add V0.5.2 cross-domain person constraints"
           git push origin main
