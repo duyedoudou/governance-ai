@@ -1,0 +1,20 @@
+[
+  {"id":"UI-01","test":"智能问答输入框固定在主内容区底部，滚动回答不消失","expected":"pass"},
+  {"id":"UI-02","test":"聊天输入区没有添加文件/上传文件入口","expected":"pass"},
+  {"id":"IA-01","test":"一级导航只有智能问答、历史记录、收藏/常用","expected":"pass"},
+  {"id":"IA-02","test":"参考数据折叠在资料与依据下，不与AI抢一级入口","expected":"pass"},
+  {"id":"REF-01","test":"参考数据先显示分类文件夹，再显示数据集/文件，再显示原始记录","expected":"pass"},
+  {"id":"REF-02","test":"原始结构化数据支持分页查看全部记录","expected":"pass"},
+  {"id":"REF-03","test":"管理员发布到新分类后，参考数据自动出现新分类文件夹","expected":"pass"},
+  {"id":"GOV-01","test":"数据治理入口位于管理员用户菜单，不在普通AI问答中","expected":"pass"},
+  {"id":"GOV-02","test":"上传文件后状态为待确认/ classified，不会立即进入AI","expected":"pass"},
+  {"id":"GOV-03","test":"上传后系统自动建议分类，允许管理员修改分类名","expected":"pass"},
+  {"id":"GOV-04","test":"点击确认发布后状态变为published，AI动态目录才可发现结构化数据","expected":"pass"},
+  {"id":"GOV-05","test":"源文件保存到Netlify Blobs，结构化行保存到Postgres JSONB","expected":"pass"},
+  {"id":"AI-01","test":"发布后的结构化自定义数据可由reference_dataset_query读取","expected":"pass"},
+  {"id":"AI-02","test":"未发布资料不能被reference_dataset_query读取","expected":"pass"},
+  {"id":"AI-03","test":"没有全文解析的PDF/Word只归档，不伪装成AI已可读取","expected":"pass"},
+  {"id":"CORE-01","question":"本村村民人数和姓名","expected":"160人，并返回人员明细"},
+  {"id":"CORE-02","question":"今年养老保险还有哪些人没缴？","expected":"28人，并返回人员明细"},
+  {"id":"CORE-03","question":"上一次台风80岁以上转移了谁？","expected":"9人，并返回人员明细"}
+]
