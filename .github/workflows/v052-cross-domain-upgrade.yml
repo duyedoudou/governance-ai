@@ -1,0 +1,140 @@
+name: Apply V0.5.2 cross-domain person query upgrade
+
+on:
+  push:
+    paths:
+      - '.github/workflows/v052-cross-domain-upgrade.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch V0.5.2 query kernel
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('netlify/functions/structured-query.mts')
+          s = path.read_text(encoding='utf-8')
+
+          old = 'type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef> };'
+          new = 'type DatasetDef = { id: string; title: string; source: string; from: string; defaultSelect: string[]; fields: Record<string, FieldDef>; distinctRows?: boolean };'
+          assert old in s, 'DatasetDef anchor missing'
+          s = s.replace(old, new, 1)
+
+          anchor = '''  },
+          households: {'''
+          block = '''  },
+          people_governance: {
+            id: "people_governance", title: "人员综合治理视图", source: "multi-person-governance",
+            from: `people p
+              LEFT JOIN households h ON h.household_id=p.household_id
+              LEFT JOIN pension_accounts pa ON pa.person_id=p.person_id
+              LEFT JOIN pension_payments pp ON pp.person_id=p.person_id
+              LEFT JOIN welfare_records w ON w.person_id=p.person_id
+              LEFT JOIN evacuations e ON e.person_id=p.person_id
+              LEFT JOIN events ev ON ev.event_id=e.event_id`,
+            defaultSelect: ["person_id","name","gender","age","village_group","address","special_tags","risk_tags"],
+            distinctRows: true,
+            fields: {
+              person_id: { type: "string", label: "人员ID", expr: "p.person_id" },
+              name: { type: "string", label: "姓名", expr: "p.name" },
+              gender: { type: "enum", label: "性别", expr: "p.gender", enumValues: ["男","女"] },
+              birth_date: { type: "date", label: "出生日期", expr: "p.birth_date" },
+              age: { type: "number", label: "年龄", expr: `EXTRACT(YEAR FROM age('${AS_OF}'::date,p.birth_date))::int` },
+              village_group: { type: "string", label: "村组", expr: "h.village_group" },
+              household_id: { type: "string", label: "家庭ID", expr: "h.household_id" },
+              address: { type: "string", label: "家庭地址", expr: "h.address" },
+              special_tags: { type: "tags", label: "特殊标签", expr: "p.special_tags" },
+              risk_tags: { type: "tags", label: "风险标签", expr: "p.risk_tags" },
+              insurance_type: { type: "string", label: "参保类型", expr: "pa.insurance_type" },
+              enrollment_status: { type: "string", label: "参保状态", expr: "pa.enrollment_status" },
+              enrollment_date: { type: "date", label: "参保日期", expr: "pa.enrollment_date" },
+              benefit_status: { type: "string", label: "待遇状态", expr: "pa.benefit_status" },
+              pension_year: { type: "number", label: "养老缴费年度", expr: "pp.year" },
+              payment_status: { type: "enum", label: "养老缴费状态", expr: "pp.payment_status", enumValues: ["已缴","未缴"] },
+              tier_amount: { type: "number", label: "缴费档次", expr: "pp.tier_amount" },
+              paid_amount: { type: "number", label: "实缴金额", expr: "pp.paid_amount" },
+              payment_date: { type: "date", label: "缴费日期", expr: "pp.payment_date" },
+              subsidy_amount: { type: "number", label: "补贴金额", expr: "pp.subsidy_amount" },
+              welfare_type: { type: "string", label: "关爱事项", expr: "w.welfare_type" },
+              welfare_status: { type: "string", label: "关爱状态", expr: "w.status" },
+              welfare_start_date: { type: "date", label: "关爱开始日期", expr: "w.start_date" },
+              welfare_end_date: { type: "date", label: "关爱结束日期", expr: "w.end_date" },
+              event: { type: "string", label: "应急事件", expr: "ev.event_name" },
+              event_type: { type: "string", label: "事件类型", expr: "ev.event_type" },
+              event_start: { type: "date", label: "事件开始时间", expr: "ev.start_time" },
+              age_at_event: { type: "number", label: "事件发生时年龄", expr: "EXTRACT(YEAR FROM age(ev.start_time,p.birth_date))::int" },
+              evacuation_time: { type: "date", label: "转移时间", expr: "e.evacuation_time" },
+              shelter: { type: "string", label: "安置地点", expr: "e.shelter" },
+              evacuation_status: { type: "string", label: "转移状态", expr: "e.status" },
+            },
+          },
+          households: {'''
+          assert anchor in s, 'people/households anchor missing'
+          s = s.replace(anchor, block, 1)
+
+          old_rule = '6. 用户问“人数”时，people/welfare/evacuations优先 count_distinct(person_id)，记录数才用 count；金额合计用 sum。\\n7. 用户要求名单/明细时 output=rows 或 both，并在select中保留相关字段。'
+          new_rule = '6. 用户问“人数”时，people/welfare/evacuations/people_governance优先 count_distinct(person_id)，记录数才用 count；金额合计用 sum。\\n7. 一个问题同时包含人口 + 养老 + 民政/关爱 + 应急等跨域“人员筛选”条件时，使用 people_governance；该数据集只用于人员去重计数或人员名单，不用于金额求和/平均值。\\n8. 用户要求名单/明细时 output=rows 或 both，并在select中保留相关字段。'
+          assert old_rule in s, 'planner rule anchor missing'
+          s = s.replace(old_rule, new_rule, 1)
+          s = s.replace('8. 当前有锁定资料时只能使用上方列出的对应dataset；管理员上传资料dataset写uploaded:<asset_id>，字段必须使用真实字段名。\\n9. 如果用户表达无法由现有字段可靠表示，设置unsupported=true并说明原因，不要近似执行。\\n10. 输出严格JSON，不要Markdown。', '9. 当前有锁定资料时只能使用上方列出的对应dataset；管理员上传资料dataset写uploaded:<asset_id>，字段必须使用真实字段名。\\n10. 如果用户表达无法由现有字段可靠表示，设置unsupported=true并说明原因，不要近似执行。\\n11. 输出严格JSON，不要Markdown。', 1)
+
+          validator_anchor = '  for (const f of spec.group_by || []) if (!fieldMap[f]) errors.push(`group_by未知字段:${f}`);'
+          validator_insert = '''  if (def?.id === "people_governance" && spec.aggregate) {
+            if (spec.aggregate.op !== "count_distinct" || spec.aggregate.field !== "person_id") errors.push("people_governance聚合只允许count_distinct(person_id)，避免一对多Join导致重复统计");
+          }
+          ''' + validator_anchor
+          assert validator_anchor in s, 'validator anchor missing'
+          s = s.replace(validator_anchor, validator_insert, 1)
+
+          sql_old = '  const sql = `SELECT ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;'
+          sql_new = '  const selectPrefix = !spec.aggregate && def.distinctRows ? "SELECT DISTINCT" : "SELECT";\n  const sql = `${selectPrefix} ${selectSql} FROM ${def.from}${where.length ? ` WHERE ${where.join(" AND ")}` : ""}${groupBy.length ? ` GROUP BY ${groupBy.join(",")}` : ""}${sortSql ? ` ORDER BY ${sortSql}` : ""} LIMIT ${limit}`;'
+          assert sql_old in s, 'compile SQL anchor missing'
+          s = s.replace(sql_old, sql_new, 1)
+
+          path.write_text(s, encoding='utf-8')
+
+          wf = Path('.github/workflows/v052-query-kernel-check.yml')
+          w = wf.read_text(encoding='utf-8')
+          old_list = "required_datasets=['people','households','household_members','pension','pension_accounts','welfare','evacuations','events','cadres','event_cadres','expenses','policies']"
+          new_list = "required_datasets=['people','people_governance','households','household_members','pension','pension_accounts','welfare','evacuations','events','cadres','event_cadres','expenses','policies']"
+          assert old_list in w, 'CI dataset list anchor missing'
+          wf.write_text(w.replace(old_list,new_list,1), encoding='utf-8')
+
+          reg = Path('V052_QUERY_REGRESSION.md')
+          r = reg.read_text(encoding='utf-8')
+          marker = '## 失败策略'
+          addition = '''## 跨域人员组合\n\n- `2026年未缴养老保险、同时属于独居关爱且60岁以上的人数` → 使用 `people_governance`，约束必须同时包含养老年度、缴费状态、关爱事项、年龄；聚合固定为 `count_distinct(person_id)`。\n- `2组、女性、2026年未缴养老保险、同时有重点转移记录的人员名单` → 使用 `people_governance`，输出人员去重名单。\n- 跨域人员视图禁止 `sum/avg` 金额聚合，避免养老/民政/应急一对多 Join 放大金额；金额统计必须使用单业务数据集。\n\n'''
+          assert marker in r, 'regression marker missing'
+          if '2026年未缴养老保险、同时属于独居关爱且60岁以上的人数' not in r:
+              reg.write_text(r.replace(marker, addition+marker,1), encoding='utf-8')
+
+          ch = Path('V052_CHANGELOG.md')
+          c = ch.read_text(encoding='utf-8')
+          if '人员综合治理视图' not in c:
+              c += '''\n## 跨域人员筛选\n\n新增只读逻辑数据集 `people_governance`，用于人口 + 养老 + 民政/关爱 + 应急的人员级组合筛选。由于底层存在一对多关联，该视图的人员列表使用去重结果；聚合只允许 `count_distinct(person_id)`。金额的 sum/avg 仍必须走对应单业务数据集，防止 Join 放大。\n'''
+              ch.write_text(c, encoding='utf-8')
+
+          print('cross-domain V0.5.2 patch applied')
+          PY
+      - name: Syntax bundle check
+        run: |
+          npm install
+          npx --yes esbuild netlify/functions/structured-query.mts --bundle --platform=node --format=esm --outfile=/tmp/structured-query.mjs --external:@netlify/functions --external:@netlify/database
+      - name: Commit patched source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add netlify/functions/structured-query.mts .github/workflows/v052-query-kernel-check.yml V052_CHANGELOG.md V052_QUERY_REGRESSION.md
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: add V0.5.2 cross-domain person constraints"
+          git push origin main
