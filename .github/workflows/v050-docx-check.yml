@@ -71,3 +71,15 @@ jobs:
             console.log(r.value.trim());
           }).catch(e=>{console.error(e);process.exit(1)});
           NODE
+      - name: Prepare deploy source
+        run: |
+          rm -rf /tmp/governance-ai-source
+          mkdir -p /tmp/governance-ai-source
+          rsync -a --exclude '.git' --exclude 'node_modules' ./ /tmp/governance-ai-source/
+      - name: Upload deploy source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-ai-v050-source
+          path: /tmp/governance-ai-source
+          include-hidden-files: true
+          retention-days: 1
