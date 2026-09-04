@@ -1,14 +1,14 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v051-deploy.log"
+LOG="$PWD/netlify-v052-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
 SITE_ID="89dfa228-952e-4712-8a99-9344cb0ea5fd"
 BACKUP_DIR="$PWD/.migration-backup-$(date +%Y%m%d-%H%M%S)"
 
-echo "=== 黄林坑村治理智能助手 V0.5.1 部署 ==="
-echo "对话意图路由 + DOCX结构化回答 + 上传资料删除 + AI村长头像"
+echo "=== 黄林坑村治理智能助手 V0.5.2 部署 ==="
+echo "QuerySpec结构化查询内核 + 约束完整性校验 + 对话意图路由 + DOCX问答 + 资料删除 + AI村长头像"
 echo "目录: $PWD"
 
 echo "\n[1/8] 检查 Node / npm"
@@ -79,7 +79,8 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "本次版本：V0.5.1（闲聊/工作意图路由 + DOCX问答 + 资料删除 + AI村长头像）。"
+  echo "本次版本：V0.5.2（QuerySpec结构化查询 + Constraint Completeness + 意图路由 + DOCX问答 + 资料删除 + AI村长头像）。"
+  echo "请重点回归：70岁以上人数、2组70岁以上女性、2026年2组未缴养老保险女性、未核验且金额>1000的费用。"
   echo "production migration 历史已与 Netlify Database 对齐。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
