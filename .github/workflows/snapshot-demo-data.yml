@@ -1,0 +1,57 @@
+name: Snapshot public demo data
+
+on:
+  push:
+    paths:
+      - '.github/workflows/snapshot-demo-data.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download public demo datasets
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://rural-governance-agent-demo.netlify.app'
+          OUT='data/demo-snapshot-v050'
+          mkdir -p "$OUT"
+          curl --fail --silent --show-error "$BASE/api/status" -o "$OUT/status.json"
+          for id in sys-people sys-households sys-pension sys-welfare sys-evacuations sys-expenses sys-policies; do
+            curl --fail --silent --show-error "$BASE/api/reference/asset?id=$id&page=1&limit=1000" -o "$OUT/$id.json"
+          done
+          python - <<'PY'
+          import json, pathlib, datetime
+          out=pathlib.Path('data/demo-snapshot-v050')
+          manifest={'version':'0.5.0','source':'public Netlify demo API','captured_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'datasets':{}}
+          for p in sorted(out.glob('sys-*.json')):
+              d=json.loads(p.read_text(encoding='utf-8'))
+              rows=d.get('rows') or []
+              asset=d.get('asset') or {}
+              manifest['datasets'][p.stem]={'title':asset.get('title'),'rows':len(rows),'fields':asset.get('fields') or []}
+              if not isinstance(rows,list):
+                  raise SystemExit(f'{p}: rows is not a list')
+          (out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (out/'README.md').write_text('''# V0.5.0 公开 Demo 数据快照\n\n此目录由当前公开演示站点的只读参考数据 API 生成，用于代码仓库中的可复现 Demo 数据备份。\n\n- 仅包含系统内置、公开演示用数据集（`sys-*`）。\n- 不包含管理员运行时上传的源文件、审计日志、访问记录或任何私有数据。\n- 这些 Demo 记录仅用于产品测试，不应视为真实村民数据。\n''',encoding='utf-8')
+          print(json.dumps(manifest,ensure_ascii=False,indent=2))
+          PY
+      - name: Commit snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/demo-snapshot-v050
+          if git diff --cached --quiet; then
+            echo 'No data changes.'
+            exit 0
+          fi
+          git commit -m 'data: snapshot V0.5.0 public demo datasets'
+          git push
