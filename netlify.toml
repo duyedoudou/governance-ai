@@ -1,6 +1,6 @@
 [build]
   publish = "site"
-  command = "echo V0.5.3.3 governance agent + avatar + conversation routing + lazy DB"
+  command = "echo V0.5.3.4 semantic tool gate + agent planner + hybrid knowledge + QuerySpec"
 
 [functions]
   directory = "netlify/functions"
