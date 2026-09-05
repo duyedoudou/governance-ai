@@ -32,7 +32,7 @@ jobs:
         run: npx --yes esbuild netlify/edge-functions/intent-router.ts --bundle --platform=neutral --format=esm --outfile=/tmp/intent-router.mjs --external:@netlify/edge-functions
       - name: Bundle Agent function
         run: npx --yes esbuild netlify/functions/agent-v053.mts --bundle --platform=node --format=esm --outfile=/tmp/agent-v053.mjs --external:@netlify/functions --external:@netlify/database
-      - name: Current routing and avatar assertions
+      - name: Semantic routing and avatar assertions
         shell: bash
         run: |
           python3 - <<'PY'
@@ -42,25 +42,26 @@ jobs:
           html=Path('site/index.html').read_text(encoding='utf-8')
           ui=Path('site/intent-ui.js').read_text(encoding='utf-8')
 
-          # Stable public routes remain intact.
           for x in ['/api/query','/api/reference/document/query','/api/status','/api/agent-v053']:
               assert x in edge, x
 
-          # Self-introduction phrases must bypass Agent/tool routing.
-          assert 'isSelfIntro' in edge
-          for phrase in ['介绍下','介绍一下','介绍你自己','自我介绍','说说你自己']:
-              assert phrase in edge, phrase
-          assert 'selfIntroResponse' in edge
-          assert 'forwardToAgent' in edge
-          assert '0.5.3.4' in edge
+          # Routing must be semantic, not a phrase whitelist/regex catalog.
+          assert 'semanticRoute' in edge
+          assert 'semantic-tool-gate' in edge
+          assert '如果不确定，优先 conversation' in edge
+          assert 'isSelfIntro' not in edge
+          assert 'isDirectChat' not in edge
+          assert 'selfIntroResponse' not in edge
+          assert '介绍你自己' not in edge
+          assert '来聊天' not in edge
 
-          # General responses must be possible before database initialization.
+          # General responses remain possible before database initialization.
           general_pos=agent.find("p.tools[0]?.tool==='general_response'")
           db_pos=agent.find('db=safeDb()')
           assert general_pos >= 0 and db_pos >= 0 and general_pos < db_pos
           assert 'const db=getDatabase()' not in agent
 
-          # Avatar uses a real independent fallback asset, not the same broken URL twice.
+          # Avatar keeps a real independent fallback asset.
           assert Path('site/assets/ai-village-chief.png').is_file()
           assert Path('site/assets/ai-village-chief-fallback.png').is_file()
           assert Path('site/assets/ai-village-chief.png').stat().st_size > 7000
@@ -68,5 +69,5 @@ jobs:
           assert '/assets/ai-village-chief.png?v=0533' in ui
           assert '/assets/ai-village-chief-fallback.png?v=0533' in ui
           assert 'intent-ui.js?v=0533' in html
-          print('V0.5.3.4 conversation routing regression assertions passed')
+          print('Semantic routing architecture assertions passed')
           PY
