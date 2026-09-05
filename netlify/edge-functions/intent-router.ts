@@ -2,83 +2,119 @@ import type { Config, Context } from "@netlify/edge-functions";
 
 function env(name: string) { try { return Netlify.env.get(name); } catch { return undefined; } }
 function text(v: unknown) { return String(v ?? "").trim(); }
-function normalized(v: unknown) { return text(v).replace(/[\s，。！？!?、~～…]+/g, "").toLowerCase(); }
-
-function isDirectChat(q: string) {
-  const n = normalized(q); if (!n) return false;
-  return /^(你好|您好|嗨|哈喽|hello|hi|在吗|在不在|来聊天|聊聊|陪我聊聊|陪我聊天|说说话|谢谢|多谢|谢了|辛苦了|好的|好嘞|行|可以|明白了|知道了|收到|哈哈|哈哈哈|再见|拜拜|晚安|早安|早上好|下午好|晚上好|你是谁|你叫什么|你会聊天吗|讲个笑话|说个笑话|我有点累|今天好累|有点烦|我好无聊|陪我一会儿)$/.test(n);
+function parseJson(s: string) {
+  try { return JSON.parse(String(s || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim() || "{}"); }
+  catch { return {}; }
 }
 
-function isSelfIntro(q: string) {
-  const n = normalized(q); if (!n) return false;
-  return /^(请)?(简单)?(介绍(一下|下)?(你自己|自己|你)?|自我介绍|说说(你自己|自己)|你是干嘛的|你是做什么的|你能干嘛|你能做什么)(吧)?$/.test(n);
-}
-
-function isSystemHelp(q: string) {
-  return /(怎么用|如何使用|这个系统|你会什么|怎么上传|如何上传|上传资料|上传文件|怎么删除|如何删除|删除资料|删除文件|数据治理|确认发布|怎么发布|如何发布|查看依据|执行过程|怎么导出|如何导出|导出结果|参考数据在哪里|管理员入口|历史记录在哪里|你的头像|AI村长头像|头像呢|头像没了|头像不见了)/.test(q);
-}
-
-async function gateway(messages: any[]) {
-  const apiKey = env("OPENAI_API_KEY"); const baseUrl = env("OPENAI_BASE_URL"); const model = env("HLK_MODEL") || "gpt-4.1-mini";
+async function gateway(messages: any[], json = false) {
+  const apiKey = env("OPENAI_API_KEY");
+  const baseUrl = env("OPENAI_BASE_URL");
+  const model = env("HLK_MODEL") || "gpt-4.1-mini";
   if (!apiKey || !baseUrl) throw new Error("AI_GATEWAY_UNAVAILABLE");
+  const body: any = { model, messages };
+  if (json) body.response_format = { type: "json_object" };
   const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`}, body:JSON.stringify({model,messages}),
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
   });
   if (!resp.ok) throw new Error(`AI_GATEWAY_${resp.status}`);
-  const data:any = await resp.json(); return { content:text(data.choices?.[0]?.message?.content), model };
+  const data: any = await resp.json();
+  return { content: text(data.choices?.[0]?.message?.content), model };
 }
 
-function responsePayload(kind:"chat"|"system_help", answer:string, modelName="none", note?: string) {
+type RouteMode = "conversation" | "system_help" | "tool";
+
+async function semanticRoute(q: string, referenceContext: any): Promise<{ mode: RouteMode; reason: string; model: string }> {
+  const { content, model } = await gateway([
+    {
+      role: "system",
+      content: `你是黄林坑村治理AI的语义路由Gate。你不是关键词分类器，也不回答用户问题。你的唯一任务是判断：为了可靠回答用户，是否必须访问系统工具、村级数据库或已发布资料。
+
+规则：
+- conversation：不读取村级数据库或资料也能正常回答，包括普通交流、关于AI自身的提问、一般知识、分析、建议、创意讨论等。
+- system_help：用户在询问这个系统本身如何使用、页面入口、上传发布、删除、依据、执行过程等产品操作。
+- tool：回答必须依赖黄林坑村的具体事实、人员、数字、台账、政策原文、已发布文档、当前锁定资料或可核验证据。
+- 不能因为一句话出现“村、养老、台风、蜂蜜、政策”等主题词就自动选择 tool；判断标准只有一个：回答是否真的必须读取村级事实或资料。
+- 如果问题本身不要求黄林坑村的具体事实，优先 conversation。
+- 如果不确定，优先 conversation，不要为了保险而乱查数据库。
+
+只输出JSON：{"mode":"conversation|system_help|tool","reason":"一句话原因"}`,
+    },
+    {
+      role: "user",
+      content: `用户问题：${q}\n当前锁定资料上下文：${JSON.stringify(referenceContext || null)}`,
+    },
+  ], true);
+  const out: any = parseJson(content);
+  const mode: RouteMode = out.mode === "tool" ? "tool" : out.mode === "system_help" ? "system_help" : "conversation";
+  return { mode, reason: text(out.reason), model };
+}
+
+function responsePayload(kind: "chat" | "system_help", answer: string, modelName = "none", note?: string) {
   return Response.json({
-    ok:true,
-    model:{mode:kind === "chat" ? "direct-chat-v0534" : "system-help-v0534",name:modelName,gateway:modelName!=="none"},
-    plan:{intent:kind,domains:[],steps:[],detail:false,note:note || (kind === "chat" ? "明确对话 · 未进入Agent工具规划" : "明确系统使用问题 · 未进入Agent工具规划")},
-    result:{kind,domain:kind === "chat" ? "闲聊" : "使用帮助",title:kind === "chat" ? "AI村长" : "系统使用说明",summary:answer,facts:[],rows:[],columns:[],recordRows:[],filters:[],evidence:[],tools:[],no_database_query:true},
-    narrative:answer,generated_at:new Date().toISOString(),
+    ok: true,
+    model: { mode: kind === "chat" ? "semantic-chat-v0534" : "semantic-system-help-v0534", name: modelName, gateway: modelName !== "none" },
+    plan: { intent: kind, domains: [], steps: [], detail: false, note: note || (kind === "chat" ? "语义Gate判定无需工具" : "语义Gate判定为系统使用问题") },
+    result: { kind, domain: kind === "chat" ? "对话" : "使用帮助", title: kind === "chat" ? "AI村长" : "系统使用说明", summary: answer, facts: [], rows: [], columns: [], recordRows: [], filters: [], evidence: [], tools: [], no_database_query: true },
+    narrative: answer,
+    generated_at: new Date().toISOString(),
   });
 }
 
-async function chatResponse(q:string) {
-  if (normalized(q) === "来聊天") return responsePayload("chat","可以呀，想聊什么？");
+async function chatResponse(q: string, routeNote = "") {
   try {
-    const {content,model} = await gateway([
-      {role:"system",content:"你是黄林坑村治理AI里的AI村长。当前是普通对话，不查询数据库，不编造黄林坑村事实。不得主动声称当前天气、景色、村里近况、人物动态等未提供事实。自然、简短、有一点人情味，不要官腔，也不要假装是真实村干部。"},
-      {role:"user",content:q},
+    const { content, model } = await gateway([
+      {
+        role: "system",
+        content: "你是黄林坑村治理AI里的AI村长。当前回答不调用村级数据库和资料。你可以正常聊天、介绍自己、解释一般知识、分析和给建议；但不得把一般知识编造成黄林坑村的具体事实，不得虚构当前天气、人数、人物动态、村务进展或任何未提供的数据。自然、直接、简洁，不要官腔，也不要假装是真实村干部。",
+      },
+      { role: "user", content: q },
     ]);
-    return responsePayload("chat",content || "当然可以，想聊点什么？",model);
-  } catch { return responsePayload("chat","当然可以，想聊点什么？"); }
+    return responsePayload("chat", content || "我在。你可以直接和我聊，也可以问需要查资料的村务问题。", model, routeNote || "语义Gate判定无需工具");
+  } catch {
+    return responsePayload("chat", "我在。你可以直接和我聊；如果问题涉及黄林坑村的具体人员、数字或资料，我会在工具恢复后再查证，不会凭空编。", "none", "语义Gate/对话模型暂不可用 · 已安全降级为无数据库回答");
+  }
 }
 
-function selfIntroResponse() {
-  return responsePayload("chat","我是这个系统里的“AI村长”。我可以陪你正常聊天，也可以在需要村级事实时调用已发布的治理数据和资料：查人口、养老、民政、应急、政策，或搜索管理员上传的文档。没有依据的村情我不会自己编；需要查数据时，我会把依据和执行过程留出来给你核验。", "none", "自我介绍 · 未查询数据库");
-}
-
-function helpResponse(q:string) {
-  let answer = "我可以正常聊天，也可以通过Agent搜索已发布资料、查询结构化治理数据，并在回答里保留依据。";
-  if (/你的头像|AI村长头像|头像呢|头像没了|头像不见了/.test(q)) answer = "AI村长头像应该显示在每条回答左侧。当前页面会加载站点头像资源；如果主资源加载失败，会自动切换到独立备用头像文件。";
-  else if (/上传/.test(q)) answer = "管理员可从右上角“演示管理员 → 数据治理”上传资料，确认发布后才进入AI可查询范围。";
-  else if (/删除/.test(q)) answer = "进入“演示管理员 → 数据治理 → 最近上传”，管理员上传资料右侧可删除；系统内置台账不可删除。";
-  else if (/依据|执行过程/.test(q)) answer = "工作回答底部可以打开“查看依据”和“执行过程”。系统会显示Agent选择了什么能力、检索了哪些资料，以及结构化查询真正生效的条件。";
-  return responsePayload("system_help",answer);
+async function systemHelpResponse(q: string, routeNote = "") {
+  const manual = `系统使用事实：
+1. 管理员入口位于右上角“演示管理员”。
+2. 数据治理中可以上传资料；上传后需确认发布，只有已发布资料进入AI可查询范围。
+3. 管理员上传资料可在“数据治理 → 最近上传”中删除；系统内置台账不可删除。
+4. 工作回答可查看“查看依据”和“执行过程”；执行过程用于展示Agent选择的能力、资料检索和结构化查询实际生效条件。
+5. 参考数据用于查看已发布的数据集和资料。`;
+  try {
+    const { content, model } = await gateway([
+      { role: "system", content: `你负责解释黄林坑村治理AI的使用方法。只能依据下面的系统使用事实回答，不要猜不存在的按钮、权限或功能。\n\n${manual}` },
+      { role: "user", content: q },
+    ]);
+    return responsePayload("system_help", content || "你可以从右上角“演示管理员”进入数据治理；工作回答底部可查看依据和执行过程。", model, routeNote || "语义Gate判定为系统使用问题");
+  } catch {
+    return responsePayload("system_help", "你可以从右上角“演示管理员”进入数据治理；管理员上传资料需确认发布后才能被AI查询，已上传资料可在最近上传中删除。", "none", "系统帮助模型暂不可用 · 使用内置系统说明");
+  }
 }
 
 function agentFailurePayload(status?: number) {
   return Response.json({
-    ok:true,
-    model:{mode:"agent-v0534-fallback",name:"none",gateway:false},
-    plan:{intent:"clarify",domains:[],steps:[{tool:"agent",params:{downstream_status:status || null}}],detail:false,note:"Agent执行异常 · 已阻止服务端错误直接透传"},
-    result:{kind:"clarify",domain:"AI村长",title:"这次没有处理成功",summary:"刚才这条消息没有处理成功，但基础聊天和页面仍然可用。请再发一次；如果是查村里数据，我不会在失败时编造结果。",facts:[],rows:[],columns:[],recordRows:[],filters:[],evidence:[],tools:[],no_database_query:true},
-    narrative:"刚才这条消息没有处理成功，但基础聊天和页面仍然可用。请再发一次；如果是查村里数据，我不会在失败时编造结果。",
-    generated_at:new Date().toISOString(),
+    ok: true,
+    model: { mode: "agent-v0534-fallback", name: "none", gateway: false },
+    plan: { intent: "clarify", domains: [], steps: [{ tool: "agent", params: { downstream_status: status || null } }], detail: false, note: "需要工具，但Agent执行异常 · 已阻止服务端错误直接透传" },
+    result: { kind: "clarify", domain: "AI村长", title: "这次没有处理成功", summary: "这条问题需要读取村级数据或资料，但查询链路刚才没有成功。我不会用猜测补结果，请稍后再试。", facts: [], rows: [], columns: [], recordRows: [], filters: [], evidence: [], tools: [], no_database_query: true },
+    narrative: "这条问题需要读取村级数据或资料，但查询链路刚才没有成功。我不会用猜测补结果，请稍后再试。",
+    generated_at: new Date().toISOString(),
   });
 }
 
-async function forwardToAgent(req:Request, context:Context) {
+async function forwardToAgent(req: Request, context: Context) {
   try {
-    const url = new URL(req.url); url.pathname = "/api/agent-v053";
-    const headers = new Headers(req.headers); headers.delete("content-length");
+    const url = new URL(req.url);
+    url.pathname = "/api/agent-v053";
+    const headers = new Headers(req.headers);
+    headers.delete("content-length");
     const body = await req.clone().text();
-    const response = await context.nextRequest(new Request(url.toString(),{method:req.method,headers,body}));
+    const response = await context.nextRequest(new Request(url.toString(), { method: req.method, headers, body }));
     if (response.status >= 500) return agentFailurePayload(response.status);
     return response;
   } catch {
@@ -86,38 +122,45 @@ async function forwardToAgent(req:Request, context:Context) {
   }
 }
 
-async function rewriteStatus(context:Context) {
-  const response = await context.next(); if (!response.ok) return response;
+async function rewriteStatus(context: Context) {
+  const response = await context.next();
+  if (!response.ok) return response;
   try {
-    const data:any = await response.json(); data.version = "0.5.3.4"; data.intent_router = "direct-chat+self-intro+agent"; data.agent_planner = "v053-lazy-db"; data.query_kernel = "queryspec-v052"; data.knowledge_retrieval = "hybrid-v053";
-    return Response.json(data,{status:response.status});
+    const data: any = await response.json();
+    data.version = "0.5.3.4";
+    data.intent_router = "semantic-tool-gate";
+    data.agent_planner = "v053-lazy-db";
+    data.query_kernel = "queryspec-v052";
+    data.knowledge_retrieval = "hybrid-v053";
+    return Response.json(data, { status: response.status });
   } catch { return response; }
 }
 
-export default async (req:Request, context:Context) => {
+export default async (req: Request, context: Context) => {
   const pathname = new URL(req.url).pathname;
   if (pathname === "/api/status" && req.method === "GET") return rewriteStatus(context);
 
-  if (pathname === "/api/reference/document/query") {
-    if (req.method !== "POST") return context.next();
-    let body:any = {}; try { body = await req.clone().json(); } catch { return context.next(); }
-    const q = text(body?.query); if (!q) return context.next();
-    if (isDirectChat(q)) return chatResponse(q);
-    if (isSelfIntro(q)) return selfIntroResponse();
-    if (isSystemHelp(q)) return helpResponse(q);
-    return context.next();
+  if ((pathname === "/api/query" || pathname === "/api/reference/document/query") && req.method === "POST") {
+    let body: any = {};
+    try { body = await req.clone().json(); } catch { return context.next(); }
+    const q = text(body?.query);
+    if (!q) return context.next();
+
+    let route: { mode: RouteMode; reason: string; model: string };
+    try {
+      route = await semanticRoute(q, body?.reference_context || null);
+    } catch {
+      route = { mode: "conversation", reason: "语义Gate不可用，默认不调用工具", model: "none" };
+    }
+
+    if (route.mode === "conversation") return chatResponse(q, route.reason);
+    if (route.mode === "system_help") return systemHelpResponse(q, route.reason);
+
+    if (pathname === "/api/reference/document/query") return context.next();
+    return forwardToAgent(req, context);
   }
 
-  if (pathname === "/api/query") {
-    if (req.method !== "POST") return context.next();
-    let body:any = {}; try { body = await req.clone().json(); } catch { return context.next(); }
-    const q = text(body?.query); if (!q) return context.next();
-    if (isDirectChat(q)) return chatResponse(q);
-    if (isSelfIntro(q)) return selfIntroResponse();
-    if (isSystemHelp(q)) return helpResponse(q);
-    return forwardToAgent(req,context);
-  }
   return context.next();
 };
 
-export const config:Config = { path:["/api/query","/api/reference/document/query","/api/status"] };
+export const config: Config = { path: ["/api/query", "/api/reference/document/query", "/api/status"] };
