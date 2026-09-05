@@ -11,7 +11,7 @@ function isDirectChat(q: string) {
 
 function isSelfIntro(q: string) {
   const n = normalized(q); if (!n) return false;
-  return /^(介绍下|介绍一下|介绍一下自己|简单介绍下|简单介绍一下|自我介绍|说说你自己|介绍一下你自己|你是干嘛的|你是做什么的|你能干嘛|你能做什么)$/.test(n);
+  return /^(请)?(简单)?(介绍(一下|下)?(你自己|自己|你)?|自我介绍|说说(你自己|自己)|你是干嘛的|你是做什么的|你能干嘛|你能做什么)(吧)?$/.test(n);
 }
 
 function isSystemHelp(q: string) {
@@ -31,7 +31,7 @@ async function gateway(messages: any[]) {
 function responsePayload(kind:"chat"|"system_help", answer:string, modelName="none", note?: string) {
   return Response.json({
     ok:true,
-    model:{mode:kind === "chat" ? "direct-chat-v0533" : "system-help-v0533",name:modelName,gateway:modelName!=="none"},
+    model:{mode:kind === "chat" ? "direct-chat-v0534" : "system-help-v0534",name:modelName,gateway:modelName!=="none"},
     plan:{intent:kind,domains:[],steps:[],detail:false,note:note || (kind === "chat" ? "明确对话 · 未进入Agent工具规划" : "明确系统使用问题 · 未进入Agent工具规划")},
     result:{kind,domain:kind === "chat" ? "闲聊" : "使用帮助",title:kind === "chat" ? "AI村长" : "系统使用说明",summary:answer,facts:[],rows:[],columns:[],recordRows:[],filters:[],evidence:[],tools:[],no_database_query:true},
     narrative:answer,generated_at:new Date().toISOString(),
@@ -65,7 +65,7 @@ function helpResponse(q:string) {
 function agentFailurePayload(status?: number) {
   return Response.json({
     ok:true,
-    model:{mode:"agent-v0533-fallback",name:"none",gateway:false},
+    model:{mode:"agent-v0534-fallback",name:"none",gateway:false},
     plan:{intent:"clarify",domains:[],steps:[{tool:"agent",params:{downstream_status:status || null}}],detail:false,note:"Agent执行异常 · 已阻止服务端错误直接透传"},
     result:{kind:"clarify",domain:"AI村长",title:"这次没有处理成功",summary:"刚才这条消息没有处理成功，但基础聊天和页面仍然可用。请再发一次；如果是查村里数据，我不会在失败时编造结果。",facts:[],rows:[],columns:[],recordRows:[],filters:[],evidence:[],tools:[],no_database_query:true},
     narrative:"刚才这条消息没有处理成功，但基础聊天和页面仍然可用。请再发一次；如果是查村里数据，我不会在失败时编造结果。",
@@ -89,7 +89,7 @@ async function forwardToAgent(req:Request, context:Context) {
 async function rewriteStatus(context:Context) {
   const response = await context.next(); if (!response.ok) return response;
   try {
-    const data:any = await response.json(); data.version = "0.5.3.3"; data.intent_router = "direct-chat+self-intro+agent"; data.agent_planner = "v053-lazy-db"; data.query_kernel = "queryspec-v052"; data.knowledge_retrieval = "hybrid-v053";
+    const data:any = await response.json(); data.version = "0.5.3.4"; data.intent_router = "direct-chat+self-intro+agent"; data.agent_planner = "v053-lazy-db"; data.query_kernel = "queryspec-v052"; data.knowledge_retrieval = "hybrid-v053";
     return Response.json(data,{status:response.status});
   } catch { return response; }
 }
