@@ -1,14 +1,14 @@
 #!/bin/bash
 set -u
 cd "$(dirname "$0")" || exit 1
-LOG="$PWD/netlify-v0533-deploy.log"
+LOG="$PWD/netlify-v0534-deploy.log"
 exec > >(tee "$LOG") 2>&1
 
 SITE_ID="89dfa228-952e-4712-8a99-9344cb0ea5fd"
 BACKUP_DIR="$PWD/.migration-backup-$(date +%Y%m%d-%H%M%S)"
 
-echo "=== 黄林坑村治理智能助手 V0.5.3.3 基础能力修复部署 ==="
-echo "V0.5.3.3：修复头像损坏、对话误路由和 Agent 无条件数据库初始化；保留全局知识检索与 V0.5.2 QuerySpec"
+echo "=== 黄林坑村治理智能助手 V0.5.3.4 语义路由修复部署 ==="
+echo "V0.5.3.4：移除提问词枚举路由，改为语义 Gate；默认不调用工具；保留 V0.5.3 知识检索与 V0.5.2 QuerySpec"
 echo "目录: $PWD"
 
 echo "\n[1/8] 检查 Node / npm"
@@ -93,9 +93,9 @@ npx netlify deploy --prod --build --debug
 STATUS=$?
 if [ "$STATUS" -eq 0 ]; then
   echo "\n部署成功：https://rural-governance-agent-demo.netlify.app"
-  echo "本次版本：V0.5.3.3（头像资源修复 + 自我介绍稳定通道 + Agent 延迟数据库初始化 + V0.5.3 知识检索）。"
-  echo "请重点回归：介绍下、来聊天、你的头像呢、蜂蜜生产情况、70岁以上人数、跨域人员筛选。"
-  echo "production migration 历史已对齐；006_knowledge-retrieval 会作为新增 migration 应用。"
+  echo "本次版本：V0.5.3.4（语义 Gate + 默认不调用工具 + Agent 延迟数据库初始化 + V0.5.3 知识检索）。"
+  echo "请重点回归：介绍你自己、你到底能干嘛、陪我聊会、蜂蜜和乡村治理有什么关系、黄林坑蜂蜜生产情况、70岁以上人数。"
+  echo "production migration 历史已对齐；不会改写已经执行过的 migration。"
   command -v open >/dev/null 2>&1 && open "https://rural-governance-agent-demo.netlify.app" || true
 else
   echo "\n部署没有完成。完整日志：$LOG"
