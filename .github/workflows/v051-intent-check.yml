@@ -46,12 +46,13 @@ jobs:
           for x in ['/api/query','/api/reference/document/query','/api/status','/api/agent-v053']:
               assert x in edge, x
 
-          # V0.5.3.3 no longer relies on the old five-bucket governance_query/document_query router.
+          # Self-introduction phrases must bypass Agent/tool routing.
           assert 'isSelfIntro' in edge
-          for phrase in ['介绍下','介绍一下','自我介绍','说说你自己']:
+          for phrase in ['介绍下','介绍一下','介绍你自己','自我介绍','说说你自己']:
               assert phrase in edge, phrase
           assert 'selfIntroResponse' in edge
           assert 'forwardToAgent' in edge
+          assert '0.5.3.4' in edge
 
           # General responses must be possible before database initialization.
           general_pos=agent.find("p.tools[0]?.tool==='general_response'")
@@ -67,5 +68,5 @@ jobs:
           assert '/assets/ai-village-chief.png?v=0533' in ui
           assert '/assets/ai-village-chief-fallback.png?v=0533' in ui
           assert 'intent-ui.js?v=0533' in html
-          print('V0.5.3.3 conversation routing and avatar assertions passed')
+          print('V0.5.3.4 conversation routing regression assertions passed')
           PY
